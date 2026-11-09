@@ -31,7 +31,6 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'SlickAmogus/silent-hill-decomp'
     permissions:
       contents: write
     runs-on: ubuntu-latest
