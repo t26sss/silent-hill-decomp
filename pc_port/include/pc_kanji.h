@@ -32,6 +32,14 @@ void Pc_KanjiAtlasReset(void);
 void Pc_KanjiSetChinese(int useChinese);
 int  Pc_KanjiChineseActive(void);
 
+/* Draw the Thai pack's glyphs. A Thai pack writes JIS kuten codes (ku 16..47)
+ * like the Chinese one, but each code is one pre-composed Thai syllable cluster
+ * from kanji_font_th.inc, indexed directly by (ku-16)*94+(ten-1) -- no shared
+ * index table -- and drawn 12 pixels wide without the 16->12 column fold, since
+ * the glyphs are authored at 12x16. Pc_KanjiSetChinese(0) also clears this. */
+void Pc_KanjiSetThai(int useThai);
+int  Pc_KanjiThaiActive(void);
+
 /* The packed CLUT word every kanji/hanzi cell is drawn with. */
 int Pc_KanjiClutId(void);
 

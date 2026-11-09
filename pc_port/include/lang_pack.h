@@ -54,9 +54,15 @@ int Pc_LangPackActive(void);
 /* `!font=portuguese`: the 126-cell PAL layout, with a-tilde, o-tilde and the
  * eight accented capitals built from the atlas's own accents at upload. */
 #define LANG_PACK_FONT_PORTUGUESE 5
+/* `!font=thai`: same byte encoding as chinese (JIS kuten pairs, ku 16..47), but
+ * each code names one pre-composed Thai syllable cluster (consonant + vowels +
+ * tone mark) in the port's embedded Thai glyph table (kanji_font_th.inc). Built
+ * by pc_port/tools/make_thai_pack.py. */
+#define LANG_PACK_FONT_THAI     6
 
 /* The two that index the embedded kanji font rather than the glyph atlas. */
-#define LangPackFontIsKanji(f) ((f) == LANG_PACK_FONT_SJIS || (f) == LANG_PACK_FONT_CHINESE)
+#define LangPackFontIsKanji(f) ((f) == LANG_PACK_FONT_SJIS || (f) == LANG_PACK_FONT_CHINESE || \
+                                (f) == LANG_PACK_FONT_THAI)
 
 int Pc_LangPackFont(void);
 
