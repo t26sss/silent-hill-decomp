@@ -5,6 +5,7 @@
 
 #include "kanji_font.inc"
 #include "kanji_font_cn.inc"
+#include "kanji_font_th.inc"
 
 /* Atlas geometry. Cells are 12x16 pixels = 3 VRAM halfwords wide at 4bpp.
  * A cell never straddles a 64-halfword texture page: each page column holds
@@ -37,6 +38,7 @@ static unsigned short s_CellSjis[CELL_COUNT];
 static int            s_CellCount = 0;
 static int            s_ClutUploaded = 0;
 static int            s_UseChinese = 0;
+static int            s_UseThai    = 0;
 
 int Pc_KanjiIsLead(unsigned char c)
 {
@@ -76,6 +78,17 @@ static const unsigned char* GlyphBits(unsigned short sjis)
     if (!SjisToKuTen(sjis, &ku, &ten))
         return 0;
 
+    /* Thai: direct (ku-16)*94+(ten-1) into its own blob. No JP index table. */
+    if (s_UseThai)
+    {
+        if (ku < KANJI_TH_KU_FIRST || ku > KANJI_TH_KU_LAST)
+            return 0;
+        g = (unsigned int)((ku - KANJI_TH_KU_FIRST) * 94 + (ten - 1));
+        if (g >= KANJI_TH_COUNT)
+            return 0;
+        return &KANJI_FONT_BITS_TH[g * 32];
+    }
+
     g = KANJI_FONT_IDX[(ku - 1) * 94 + (ten - 1)];
     if (g == 0xFFFF)
         return 0;
@@ -92,10 +105,11 @@ static const unsigned char* GlyphBits(unsigned short sjis)
 void Pc_KanjiSetChinese(int useChinese)
 {
     useChinese = (useChinese != 0);
-    if (useChinese == s_UseChinese)
+    if (useChinese == s_UseChinese && !s_UseThai)
         return;
 
     s_UseChinese = useChinese;
+    s_UseThai    = 0; /* selecting any JP/CN set leaves Thai */
     /* Cached cells hold glyphs rasterized from the other font. Drop them (but
      * not the CLUT, which is font-independent) so they re-rasterize on demand. */
     s_CellCount = 0;
@@ -104,6 +118,23 @@ void Pc_KanjiSetChinese(int useChinese)
 int Pc_KanjiChineseActive(void)
 {
     return s_UseChinese;
+}
+
+void Pc_KanjiSetThai(int useThai)
+{
+    useThai = (useThai != 0);
+    if (useThai == s_UseThai)
+        return;
+
+    s_UseThai = useThai;
+    if (useThai)
+        s_UseChinese = 0;
+    s_CellCount = 0; /* cached cells came from the other font */
+}
+
+int Pc_KanjiThaiActive(void)
+{
+    return s_UseThai;
 }
 
 static void CellCoords(int cell, int* vramX, int* vramY, unsigned int* page, int* u, int* v)
@@ -166,8 +197,16 @@ static void RasterizeCell(const unsigned char* bits, int vramX, int vramY)
             int on = 0;
             int s;
 
-            for (s = b0; s < b1; s++)
-                on |= (src >> (15 - s)) & 1;
+            if (s_UseThai)
+            {
+                /* Authored at 12 columns (bits 15..4): copy, do not fold. */
+                on = (src >> (15 - j)) & 1;
+            }
+            else
+            {
+                for (s = b0; s < b1; s++)
+                    on |= (src >> (15 - s)) & 1;
+            }
 
             if (on)
                 buf[row * CELL_W_HW + (j >> 2)] |= (unsigned short)(1u << ((j & 3) * 4));

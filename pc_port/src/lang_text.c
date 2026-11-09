@@ -18,7 +18,6 @@
 #include "font_region.h"      /* g_FontLayout, Font_SetGlyphWidths (fan-patch kerning) */
 #include "lang_pack.h"        /* PC-side language packs (gamedata/lang) */
 #include "lang_ru.h"          /* Russian fan-patch detection + menu text */
-#include "lang_ar.h"          /* Arabic fan-patch detection, RTL drawing, disc UI text */
 #include "pc_kanji.h"         /* Pc_KanjiSetChinese (NTSC-J glyph set) */
 #include "lang_jpn.h"         /* NTSC-J menu text from the disc overlays */
 #include "main/fsqueue.h"     /* Fs_QueueStartReadTim, FS_BUFFER_1 */
@@ -142,6 +141,23 @@ static int SlotsOfferPacks(void)
     return g_GameWork.gameStatePrev == GameState_MainMenu || g_GameRegion != Region_EUR;
 }
 
+/* A Thai pack rasterizes its own glyphs (like Shift-JIS/Chinese), so it needs
+ * nothing imported from a PAL disc and is safe on any region. Its presence opens
+ * the Language row on USA/NTSC-J discs without the crossRegionLanguages switch,
+ * which otherwise hides the row ("retail behaviour"). */
+static int ThaiPackInstalled(void)
+{
+    int n = Pc_LangPackListCount();
+    int i;
+
+    for (i = 0; i < n; i++)
+    {
+        if (Pc_LangPackListFont(i) == LANG_PACK_FONT_THAI)
+            return 1;
+    }
+    return 0;
+}
+
 static int PackOfferedHere(int packIdx)
 {
     const char* code = Pc_LangPackListCode(packIdx);
@@ -173,7 +189,8 @@ static int PackOfferedHere(int packIdx)
     {
         /* Without the imported atlas only a Shift-JIS pack, which rasterizes
          * its own glyphs, can draw correctly off a PAL disc. */
-        return font == LANG_PACK_FONT_SJIS || font == LANG_PACK_FONT_CHINESE;
+        return font == LANG_PACK_FONT_SJIS || font == LANG_PACK_FONT_CHINESE ||
+               font == LANG_PACK_FONT_THAI;
     }
 
     /* The Latin packs draw base letters where the PAL cell grid is not
@@ -200,7 +217,7 @@ static void SlotsBuild(void)
      * Latin, Polish and Cyrillic pack draws correctly there with nothing moved
      * -- including an installed custom one. It gets the full list either way,
      * and only a US or Japanese disc is held back. */
-    if (!g_PcConfig.crossRegionLanguages && g_GameRegion != Region_EUR)
+    if (!g_PcConfig.crossRegionLanguages && g_GameRegion != Region_EUR && !ThaiPackInstalled())
     {
         int k;
 
@@ -1051,17 +1068,6 @@ static void LangInitBody(void)
      * Font_ResetLayout for the switch-away-and-back fold-up it caused). */
     Font_ResetLayout();
 
-    /* An Arabic disc is its own language: both patches overwrite the ENGLISH
-     * script (US text on the USA disc, the English VIN set and ITEM_ENG on PAL)
-     * and repaint every Latin cell, so any other id would install German or a
-     * pack over it and draw that through Arabic glyphs. Decided before the
-     * saved code resolves below, because on PAL that resolution redirects the
-     * file table to the chosen language's VIN set. Session only, like the
-     * Russian rule further down: the saved choice survives for the next disc. */
-    Pc_ArInit();
-    if (Pc_ArActive())
-        g_PcConfig.language = 0;
-
     /* First run: turn the saved code into this disc's id. The parser could not
      * -- it runs before the region is known and before the pack registry can
      * be read -- so until now a saved language only survived a reboot on the
@@ -1079,8 +1085,6 @@ static void LangInitBody(void)
              * so a PAL disc set to a disc language kept the English map
              * overlays and death hints -- the items alone came out translated.
              * No-op off PAL. */
-            if (Pc_ArActive())
-                g_PcConfig.language = 0;
             Fs_ApplyLanguageRedirects();
 
             /* An NTSC-J disc picks its three own languages by jpLanguage, not
@@ -1181,7 +1185,7 @@ static void LangInitBody(void)
             if (!LangPackFontIsKanji(Pc_LangPackFont()))
             {
                 Font_UseEurAtlas();
-                Pc_KanjiSetChinese(0); /* in case the last pack was Chinese */
+                Pc_KanjiSetChinese(0); /* in case the last pack was Chinese or Thai */
             }
 
             if (Pc_LangPackFont() == LANG_PACK_FONT_CYRILLIC)
@@ -1195,6 +1199,19 @@ static void LangInitBody(void)
                 /* This pack carries its own item text, so there is nothing to
                  * install alongside it -- only the glyph table to switch. */
                 Pc_KanjiSetChinese(1);
+            }
+            else if (Pc_LangPackFont() == LANG_PACK_FONT_THAI)
+            {
+                /* Same as Chinese: the pack carries its own item text and
+                 * only the glyph table needs switching (Thai clusters).
+                 *
+                 * Unlike Shift-JIS, the ASCII in a Thai pack (menu labels, digits,
+                 * punctuation, the language name itself) must come from a Latin
+                 * atlas. On a disc patched with a Thai fan translation, FONT16's
+                 * Latin cells are repainted with Thai letters, so without the
+                 * imported PAL atlas every ASCII string draws as Thai gibberish. */
+                Font_UseEurAtlas();
+                Pc_KanjiSetThai(1);
             }
             else if (Pc_LangPackFont() == LANG_PACK_FONT_SJIS)
             {
@@ -1609,7 +1626,7 @@ int Pc_LangMenuRowActive(void)
      * disc patch carries). Not on a Russian patch though — its font has no
      * Latin letters, so every other language on the row is unreadable and the
      * menus are already Russian; the slot goes back to retail's Auto Load. */
-    if (Pc_RuActive() || Pc_ArActive())
+    if (Pc_RuActive())
     {
         return 0;
     }
@@ -1632,7 +1649,7 @@ int Pc_LangMenuRowActive(void)
      * row is the only way to reach them. Still title-screen only: a switch
      * rebinds the file table and reloads item text, which would strand what
      * the loaded map already extracted. */
-    if (!g_PcConfig.crossRegionLanguages && g_GameRegion != Region_EUR)
+    if (!g_PcConfig.crossRegionLanguages && g_GameRegion != Region_EUR && !ThaiPackInstalled())
         return 0; /* retail behaviour: this row is Auto Load off a PAL disc */
 
     return SlotsCount() > 1;
@@ -2733,7 +2750,8 @@ void Pc_TextOverrideApply(int mapIdx)
 /* One line per layer of the current language, for the LANGCHECK command. */
 void Pc_LangSelfCheck(void (*out)(const char*, ...))
 {
-    static const char* const fonts[] = { "latin", "polish", "cyrillic", "sjis" };
+    static const char* const fonts[] = { "latin", "polish", "cyrillic", "sjis", "chinese",
+                                         "portuguese", "thai" };
     int   font = Pc_LangPackActive() ? Pc_LangPackFont() : -1;
     int   slot = Pc_LangSlotCurrent();
 
@@ -2742,7 +2760,7 @@ void Pc_LangSelfCheck(void (*out)(const char*, ...))
     out("  disc      %s", g_GameRegion == Region_EUR ? "PAL"
                         : g_GameRegion == Region_JPN ? "NTSC-J" : "NTSC-U");
     out("  pack      %s%s%s", Pc_LangPackActive() ? "loaded, font " : "none",
-        Pc_LangPackActive() ? ((font >= 0 && font <= 3) ? fonts[font] : "?") : "",
+        Pc_LangPackActive() ? ((font >= 0 && font <= 6) ? fonts[font] : "?") : "",
         (!Pc_LangPackActive() && g_PcConfig.language == LANG_EN_US)
             ? " (compiled US text)" : "");
     if (s_StatMapIdx < 0)

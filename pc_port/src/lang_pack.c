@@ -349,6 +349,8 @@ static int PackFontFromName(const char* v)
         return LANG_PACK_FONT_CHINESE;
     if (strcmp(v, "portuguese") == 0)
         return LANG_PACK_FONT_PORTUGUESE;
+    if (strcmp(v, "thai") == 0)
+        return LANG_PACK_FONT_THAI;
     return LANG_PACK_FONT_LATIN;
 }
 
