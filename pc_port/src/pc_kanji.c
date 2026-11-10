@@ -170,6 +170,9 @@ static void UploadClut(void)
     clut[0] = 0x0000; /* index 0 = transparent */
     for (i = 1; i < 16; i++)
         clut[i] = 0x7FFF; /* opaque white; prims tint via RGB modulation */
+    /* Index 2 = drop shadow (Thai cells only; JP/CN never write index 2). Near
+     * black, not 0x0000, which the GPU treats as transparent. */
+    clut[2] = 0x0421;
 
     GR_CopyVRAM(clut, 0, 0, 16, 1, CLUT_X, CLUT_Y);
     s_ClutUploaded = 1;
@@ -185,6 +188,41 @@ static void RasterizeCell(const unsigned char* bits, int vramX, int vramY)
     int            row, j;
 
     memset(buf, 0, sizeof(buf));
+
+    if (s_UseThai)
+    {
+        /* Authored at 12 columns (bits 15..4): copy, do not fold. Ink is CLUT
+         * index 1 (white); a 1px shadow to the right/below/diagonal is index 2
+         * (dark), like the retail Latin font's. */
+        unsigned char ink[16][12];
+
+        for (row = 0; row < 16; row++)
+        {
+            unsigned int src = ((unsigned int)bits[row * 2] << 8) | bits[row * 2 + 1];
+
+            for (j = 0; j < 12; j++)
+                ink[row][j] = (unsigned char)((src >> (15 - j)) & 1);
+        }
+
+        for (row = 0; row < 16; row++)
+        {
+            for (j = 0; j < 12; j++)
+            {
+                unsigned int v = 0;
+
+                if (ink[row][j])
+                    v = 1;
+                else if ((j > 0 && ink[row][j - 1]) || (row > 0 && ink[row - 1][j]) ||
+                         (row > 0 && j > 0 && ink[row - 1][j - 1]))
+                    v = 2;
+
+                buf[row * CELL_W_HW + (j >> 2)] |= (unsigned short)(v << ((j & 3) * 4));
+            }
+        }
+
+        GR_CopyVRAM(buf, 0, 0, CELL_W_HW, 16, vramX, vramY);
+        return;
+    }
 
     for (row = 0; row < 16; row++)
     {
