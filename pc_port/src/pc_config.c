@@ -179,6 +179,7 @@ s_PcConfig g_PcConfig = {
     .dreamBlurStrength       = 1.0f, /* feedback gain of that blur; 1.0 = hardware */
     .loadScreenMin           = 3.0f, /* seconds the Harry loading screen stays up at least */
     .minimapOpacity          = 100.0f,
+    .minimapRotate                   = 1,
     .disableDpadMovement     = 0, /* D-pad still drives movement (off = byte-identical) */
     .menuFilter              = 0, /* menus unfiltered (off = byte-identical) */
     .adsr                = 1,    /* SPU ADSR envelopes on (BGM instrument fades) */
@@ -1499,6 +1500,10 @@ else if (strcmp(key, "enable_plugins") == 0)
             if (v < 0.0f)   v = 0.0f;
             if (v > 100.0f) v = 100.0f;
             g_PcConfig.minimapOpacity = v;
+        }
+        else if (strcmp(key, "minimap_rotate") == 0)
+        {
+            g_PcConfig.minimapRotate = (atoi(value) != 0);
         }
         else if (strcmp(key, "disable_dpad_movement") == 0)
         {

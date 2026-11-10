@@ -469,6 +469,7 @@ static const s_PcOpt PCOPT_H[] = {
      * draw the minimap once the area's paper map is found (the default); Off =
      * always draw it. Was config-only (minimap_require_map). */
     { "Minimap_Reqs_Map",  &g_PcConfig.minimapRequireMap,  "minimap_require_map",  VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
+    { "Minimap_Rotate",    &g_PcConfig.minimapRotate,     "minimap_rotate",      VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
 #if !defined(SH_IOS) && !defined(__ANDROID__)
     /* Pulsing red edge glow below 20 hp (pc_combat.c Pc_LowHealthGlowUpdate).
      * On a phone it sits on the last page instead, with PCOPT_M. */

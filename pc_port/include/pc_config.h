@@ -654,6 +654,11 @@ typedef struct {
      * default); 2 = the original game: 1, and the clip also fills from the
      * reserve the moment the gun is raised, silently. (config key: auto_reload) */
     int autoReload;
+
+    /* Minimap: 1 = map turns around Harry (arrow points up); 0 = north-up.
+     * Appended last so plugins built against the earlier layout still work.
+     * (config key: minimap_rotate) */
+    int minimapRotate;
 } s_PcConfig;
 
 extern s_PcConfig g_PcConfig;

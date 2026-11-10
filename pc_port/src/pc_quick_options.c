@@ -213,6 +213,7 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "minimap_corner",       0, NULL },
     { ROW_OPT,   "minimap_opacity",      0, NULL },
     { ROW_OPT,   "minimap_require_map",  0, NULL },
+	{ ROW_OPT,   "minimap_rotate",         0, NULL },
     { ROW_OPT,   "crosshair",            0, NULL },
     { ROW_OPT,   "crosshair_size",       0, NULL },
     /* Quick menu only: crosshair_style has no row in the PC Options table and
