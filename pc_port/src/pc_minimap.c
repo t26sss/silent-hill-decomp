@@ -63,10 +63,6 @@ int g_PcMapQueryOnly = 0;
  * its own arrow; this hands the same corrected angle to the minimap. */
 q3_12 g_PcMapQueryAngle = 0;
 
-/* Rotating minimap (GTA style): 1 = the map turns around Harry so his arrow
- * always points UP; 0 = classic north-up. Defined here so the file builds on its
- * own; wire it to g_PcConfig / the PC Options menu later (see notes). */
-int g_PcMinimapRotate = 1;
 
 /* Panel geometry in 2D screen space (origin = screen centre; 4:3 is
  * x -160..+160, y -120..+120). Top-left corner, inset a little. */
@@ -454,6 +450,52 @@ typedef struct
 
 static POLY_FT4 s_markPrim[2][MM_MARK_MAX];
 
+/* Rotating mode draws markings as clipped triangle fans (a rotated rectangle
+ * cannot be cropped by UV like the axis-aligned path), so a mark sliding over
+ * the panel edge is cut by the edge instead of popping in and out. */
+#define MM_MARK_TRI_MAX 96
+#define MM_CLIP_MAX     24
+#define MM_CLIP_SEG     16   /* sides of the polygon that approximates the disc */
+
+static POLY_FT3 s_markTri[2][MM_MARK_TRI_MAX];
+static int      s_markTriCount[2];
+
+typedef struct { float x, y, u, v; } s_MmVtx;
+
+static float mm_side(float ax, float ay, float bx, float by, float px, float py)
+{
+    return ((bx - ax) * (py - ay)) - ((by - ay) * (px - ax));
+}
+
+/* Sutherland-Hodgman against one edge; `cs` (+1/-1) says which side is inside.
+ * UV is interpolated along the cut, which is exact: the map is an affine
+ * function of screen position. */
+static int mm_clip_half(const s_MmVtx* in, int n, s_MmVtx* out,
+                        float ex0, float ey0, float ex1, float ey1, float cs)
+{
+    int i, m = 0;
+
+    for (i = 0; i < n; i++)
+    {
+        const s_MmVtx* a = &in[i];
+        const s_MmVtx* b = &in[(i + 1) % n];
+        float da = mm_side(ex0, ey0, ex1, ey1, a->x, a->y) * cs;
+        float db = mm_side(ex0, ey0, ex1, ey1, b->x, b->y) * cs;
+
+        if (da >= 0.0f && m < MM_CLIP_MAX) out[m++] = *a;
+        if (((da >= 0.0f) != (db >= 0.0f)) && m < MM_CLIP_MAX)
+        {
+            float t = da / (da - db);
+            out[m].x = a->x + ((b->x - a->x) * t);
+            out[m].y = a->y + ((b->y - a->y) * t);
+            out[m].u = a->u + ((b->u - a->u) * t);
+            out[m].v = a->v + ((b->v - a->v) * t);
+            m++;
+        }
+    }
+    return m;
+}
+
 /* Build the visible paper-map markings as textured prims over the map image.
  * Mirrors func_80068E0C's table walk and flag test exactly; only the output
  * transform differs (that function draws at full-map scale, this one inside the
@@ -466,6 +508,7 @@ static int mm_markers_build(int buf, const s_MmView* vw)
     int vh  = vw->v1 - vw->v0;
     int n, i, j, count = 0;
 
+    s_markTriCount[buf] = 0;
     if (!s_markReady || uw <= 0 || vh <= 0) return 0;
     if (idx < 0 || idx >= MM_PAPER_MAP_COUNT) return 0;
     /* Atlas belonging to a DIFFERENT area is still resident (its read has not
@@ -504,57 +547,108 @@ static int mm_markers_build(int buf, const s_MmView* vw)
             col0 = (place.field_0 * 2) + (MM_MAP_W / 2);
             row0 = (place.field_1 * 2) + (MM_MAP_H / 2);
 
-            /* Rotating mode: the 4 corners of the mark are rotated around the
-             * panel centre (= window centre) by the inverse heading. A mark is
-             * only drawn when ALL its corners are inside the panel (rotated
-             * quads can't be cropped like the axis-aligned path does), so marks
-             * at the very edge appear once they are fully inside. */
+            /* Rotating mode: rotate the 4 corners around the panel centre by the
+             * inverse heading, clip the quad to the panel (disc or box), and
+             * draw what is left as a triangle fan. */
             if (vw->rot)
             {
-                float cf  = (float)vw->ca / 4096.0f;
-                float sf  = (float)vw->sa / 4096.0f;
-                float ksc = (float)vw->size / (float)(2 * vw->uvHalf);
-                float ucf = (float)(vw->u0 + vw->u1) * 0.5f;
-                float vcf = (float)(vw->v0 + vw->v1) * 0.5f;
-                int   cc[4], rr[4], qx[4], qy[4], q, inside = 1;
+                float    cf  = (float)vw->ca / 4096.0f;
+                float    sf  = (float)vw->sa / 4096.0f;
+                float    ksc = (float)vw->size / (float)(2 * vw->uvHalf);
+                float    ucf = (float)(vw->u0 + vw->u1) * 0.5f;
+                float    vcf = (float)(vw->v0 + vw->v1) * 0.5f;
+                int      cc[4], rr[4], q, n, e;
+                int      au0 = spr.field_0, av0 = spr.field_1;
+                int      au1 = spr.field_0 + spr.field_2, av1 = spr.field_1 + spr.field_3;
+                int      umax = (au1 > MM_UV_MAX) ? MM_UV_MAX : au1;
+                int      vmax = (av1 > MM_UV_MAX) ? MM_UV_MAX : av1;
+                s_MmVtx  bufA[MM_CLIP_MAX], bufB[MM_CLIP_MAX];
+                s_MmVtx* cur = bufA;
+                s_MmVtx* nxt = bufB;
+                float    mcx = (float)vw->cx, mcy = (float)vw->cy;
 
+                /* ring order TL, TR, BR, BL */
                 cc[0] = col0;               rr[0] = row0;
                 cc[1] = col0 + spr.field_2; rr[1] = row0;
-                cc[2] = col0;               rr[2] = row0 + spr.field_3;
-                cc[3] = col0 + spr.field_2; rr[3] = row0 + spr.field_3;
+                cc[2] = col0 + spr.field_2; rr[2] = row0 + spr.field_3;
+                cc[3] = col0;               rr[3] = row0 + spr.field_3;
 
                 for (q = 0; q < 4; q++)
                 {
                     float du = ((float)cc[q] * (float)MM_UV_MAX / (float)MM_MAP_W) - ucf;
                     float dv = ((float)rr[q] * (float)MM_UV_MAX / (float)MM_MAP_H) - vcf;
 
-                    qx[q] = vw->cx + (int)floorf(((du * cf) + (dv * sf)) * ksc + 0.5f);
-                    qy[q] = vw->cy + (int)floorf(((dv * cf) - (du * sf)) * ksc + 0.5f);
+                    cur[q].x = mcx + (((du * cf) + (dv * sf)) * ksc);
+                    cur[q].y = mcy + (((dv * cf) - (du * sf)) * ksc);
+                    cur[q].u = (q == 0 || q == 3) ? (float)au0 : (float)au1;
+                    cur[q].v = (q == 0 || q == 1) ? (float)av0 : (float)av1;
+                }
+                n = 4;
 
-                    if (vw->round)
+                if (vw->round)
+                {
+                    /* Slightly outside the true circle so the 16-gon never cuts
+                     * a mark short of the ring; the black outline covers it. */
+                    float rad = (float)vw->R * 1.01f;
+                    float px0 = mcx + rad, py0 = mcy;
+
+                    for (e = 1; e <= MM_CLIP_SEG && n > 0; e++)
                     {
-                        int ddx = qx[q] - vw->cx, ddy = qy[q] - vw->cy;
-                        if ((ddx * ddx) + (ddy * ddy) > (vw->R * vw->R)) inside = 0;
-                    }
-                    else if (qx[q] < vw->x0 || qx[q] > vw->x1 ||
-                             qy[q] < vw->y0 || qy[q] > vw->y1)
-                    {
-                        inside = 0;
+                        q3_12 ca2 = (q3_12)((4096 * e) / MM_CLIP_SEG);
+                        float px1 = mcx + (rad * (float)Math_Cos(ca2) / 4096.0f);
+                        float py1 = mcy + (rad * (float)Math_Sin(ca2) / 4096.0f);
+                        float cs  = (mm_side(px0, py0, px1, py1, mcx, mcy) >= 0.0f) ? 1.0f : -1.0f;
+                        s_MmVtx* tmp;
+
+                        n = mm_clip_half(cur, n, nxt, px0, py0, px1, py1, cs);
+                        tmp = cur; cur = nxt; nxt = tmp;
+                        px0 = px1; py0 = py1;
                     }
                 }
-                if (!inside) continue;
+                else
+                {
+                    float bx[5], by[5];
 
-                p = &s_markPrim[buf][count++];
-                setPolyFT4(p);
-                setRGB0(p, (u8)vw->lum, (u8)vw->lum, (u8)vw->lum);
-                setSemiTrans(p, 1);
-                setXY4(p, qx[0], qy[0], qx[1], qy[1], qx[2], qy[2], qx[3], qy[3]);
-                p->tpage = getTPage(0, 2, 0, 0);
-                p->clut  = MM_MARK_CLUT;
-                p->u0 = (u8)spr.field_0;                 p->v0 = (u8)spr.field_1;
-                p->u1 = (u8)(spr.field_0 + spr.field_2); p->v1 = (u8)spr.field_1;
-                p->u2 = (u8)spr.field_0;                 p->v2 = (u8)(spr.field_1 + spr.field_3);
-                p->u3 = (u8)(spr.field_0 + spr.field_2); p->v3 = (u8)(spr.field_1 + spr.field_3);
+                    bx[0] = (float)vw->x0; by[0] = (float)vw->y0;
+                    bx[1] = (float)vw->x1; by[1] = (float)vw->y0;
+                    bx[2] = (float)vw->x1; by[2] = (float)vw->y1;
+                    bx[3] = (float)vw->x0; by[3] = (float)vw->y1;
+                    bx[4] = bx[0];         by[4] = by[0];
+
+                    for (e = 0; e < 4 && n > 0; e++)
+                    {
+                        float cs = (mm_side(bx[e], by[e], bx[e + 1], by[e + 1], mcx, mcy) >= 0.0f) ? 1.0f : -1.0f;
+                        s_MmVtx* tmp;
+
+                        n = mm_clip_half(cur, n, nxt, bx[e], by[e], bx[e + 1], by[e + 1], cs);
+                        tmp = cur; cur = nxt; nxt = tmp;
+                    }
+                }
+                if (n < 3) continue;
+
+                for (q = 1; q + 1 < n && s_markTriCount[buf] < MM_MARK_TRI_MAX; q++)
+                {
+                    POLY_FT3* t = &s_markTri[buf][s_markTriCount[buf]++];
+                    int k[3];
+                    int ux[3], vy[3];
+
+                    k[0] = 0; k[1] = q; k[2] = q + 1;
+                    for (e = 0; e < 3; e++)
+                    {
+                        ux[e] = mm_clamp((int)floorf(cur[k[e]].u + 0.5f), au0, umax);
+                        vy[e] = mm_clamp((int)floorf(cur[k[e]].v + 0.5f), av0, vmax);
+                    }
+                    setPolyFT3(t);
+                    setRGB0(t, (u8)vw->lum, (u8)vw->lum, (u8)vw->lum);
+                    setSemiTrans(t, 1);
+                    setXY3(t,
+                           (int)floorf(cur[k[0]].x + 0.5f), (int)floorf(cur[k[0]].y + 0.5f),
+                           (int)floorf(cur[k[1]].x + 0.5f), (int)floorf(cur[k[1]].y + 0.5f),
+                           (int)floorf(cur[k[2]].x + 0.5f), (int)floorf(cur[k[2]].y + 0.5f));
+                    setUV3(t, (u8)ux[0], (u8)vy[0], (u8)ux[1], (u8)vy[1], (u8)ux[2], (u8)vy[2]);
+                    t->tpage = getTPage(0, 2, 0, 0);
+                    t->clut  = MM_MARK_CLUT;
+                }
                 continue;
             }
 
@@ -733,7 +827,7 @@ void Pc_MinimapUpdate(void)
 
     /* Rotating mode needs a valid heading, i.e. a successful query. */
     hdg = g_PcMapQueryAngle;
-    rot = (g_PcMinimapRotate != 0 && packed != 0);
+    rot = (g_PcConfig.minimapRotate != 0 && packed != 0);
     if (rot)
     {
         hca = Math_Cos(hdg);
@@ -979,6 +1073,11 @@ void Pc_MinimapUpdate(void)
     AddPrim(ot, &s_mark[buf]);
     for (i = 0; i < markCount; i++)
         AddPrim(ot, &s_markPrim[buf][i]);
+    if (haveMap)
+    {
+        for (i = 0; i < s_markTriCount[buf]; i++)
+            AddPrim(ot, &s_markTri[buf][i]);
+    }
     if (round)
     {
         for (i = 0; i < MM_SEG; i++)
