@@ -63,6 +63,11 @@ int g_PcMapQueryOnly = 0;
  * its own arrow; this hands the same corrected angle to the minimap. */
 q3_12 g_PcMapQueryAngle = 0;
 
+/* Rotating minimap (GTA style): 1 = the map turns around Harry so his arrow
+ * always points UP; 0 = classic north-up. Defined here so the file builds on its
+ * own; wire it to g_PcConfig / the PC Options menu later (see notes). */
+int g_PcMinimapRotate = 1;
+
 /* Panel geometry in 2D screen space (origin = screen centre; 4:3 is
  * x -160..+160, y -120..+120). Top-left corner, inset a little. */
 #define MM_SIZE   72
@@ -442,6 +447,9 @@ typedef struct
     int u0, v0, u1, v1; /* map-image window currently sampled, in UV units */
     int size;           /* panel edge length */
     int lum, semi;
+    int rot;            /* rotating mode on */
+    s32 ca, sa;         /* Harry's heading, Q12 cos/sin (paper-map space) */
+    int uvHalf;         /* UV half-width shown across the panel edge */
 } s_MmView;
 
 static POLY_FT4 s_markPrim[2][MM_MARK_MAX];
@@ -495,6 +503,60 @@ static int mm_markers_build(int buf, const s_MmView* vw)
              * street corner. */
             col0 = (place.field_0 * 2) + (MM_MAP_W / 2);
             row0 = (place.field_1 * 2) + (MM_MAP_H / 2);
+
+            /* Rotating mode: the 4 corners of the mark are rotated around the
+             * panel centre (= window centre) by the inverse heading. A mark is
+             * only drawn when ALL its corners are inside the panel (rotated
+             * quads can't be cropped like the axis-aligned path does), so marks
+             * at the very edge appear once they are fully inside. */
+            if (vw->rot)
+            {
+                float cf  = (float)vw->ca / 4096.0f;
+                float sf  = (float)vw->sa / 4096.0f;
+                float ksc = (float)vw->size / (float)(2 * vw->uvHalf);
+                float ucf = (float)(vw->u0 + vw->u1) * 0.5f;
+                float vcf = (float)(vw->v0 + vw->v1) * 0.5f;
+                int   cc[4], rr[4], qx[4], qy[4], q, inside = 1;
+
+                cc[0] = col0;               rr[0] = row0;
+                cc[1] = col0 + spr.field_2; rr[1] = row0;
+                cc[2] = col0;               rr[2] = row0 + spr.field_3;
+                cc[3] = col0 + spr.field_2; rr[3] = row0 + spr.field_3;
+
+                for (q = 0; q < 4; q++)
+                {
+                    float du = ((float)cc[q] * (float)MM_UV_MAX / (float)MM_MAP_W) - ucf;
+                    float dv = ((float)rr[q] * (float)MM_UV_MAX / (float)MM_MAP_H) - vcf;
+
+                    qx[q] = vw->cx + (int)floorf(((du * cf) + (dv * sf)) * ksc + 0.5f);
+                    qy[q] = vw->cy + (int)floorf(((dv * cf) - (du * sf)) * ksc + 0.5f);
+
+                    if (vw->round)
+                    {
+                        int ddx = qx[q] - vw->cx, ddy = qy[q] - vw->cy;
+                        if ((ddx * ddx) + (ddy * ddy) > (vw->R * vw->R)) inside = 0;
+                    }
+                    else if (qx[q] < vw->x0 || qx[q] > vw->x1 ||
+                             qy[q] < vw->y0 || qy[q] > vw->y1)
+                    {
+                        inside = 0;
+                    }
+                }
+                if (!inside) continue;
+
+                p = &s_markPrim[buf][count++];
+                setPolyFT4(p);
+                setRGB0(p, (u8)vw->lum, (u8)vw->lum, (u8)vw->lum);
+                setSemiTrans(p, 1);
+                setXY4(p, qx[0], qy[0], qx[1], qy[1], qx[2], qy[2], qx[3], qy[3]);
+                p->tpage = getTPage(0, 2, 0, 0);
+                p->clut  = MM_MARK_CLUT;
+                p->u0 = (u8)spr.field_0;                 p->v0 = (u8)spr.field_1;
+                p->u1 = (u8)(spr.field_0 + spr.field_2); p->v1 = (u8)spr.field_1;
+                p->u2 = (u8)spr.field_0;                 p->v2 = (u8)(spr.field_1 + spr.field_3);
+                p->u3 = (u8)(spr.field_0 + spr.field_2); p->v3 = (u8)(spr.field_1 + spr.field_3);
+                continue;
+            }
 
             #define MM_COL2X(c) (vw->x0 + ((((c) * MM_UV_MAX) - (vw->u0 * MM_MAP_W)) * vw->size) / (MM_MAP_W * uw))
             #define MM_ROW2Y(r) (vw->y0 + ((((r) * MM_UV_MAX) - (vw->v0 * MM_MAP_H)) * vw->size) / (MM_MAP_H * vh))
@@ -586,6 +648,9 @@ void Pc_MinimapUpdate(void)
     s32       mkScale = 4096;
     int       u0 = 0, v0 = 0, u1 = MM_UV_MAX, v1 = MM_UV_MAX;
     int       markCount = 0;
+    int       rot = 0, uvHalf = 0;
+    s32       hca = 4096, hsa = 0;
+    q3_12     hdg = 0;
     GsOT_TAG* ot;
 
 
@@ -666,6 +731,15 @@ void Pc_MinimapUpdate(void)
     packed = mm_query_at(mm_effective_map_idx());
     g_PcMapQueryOnly  = 0;
 
+    /* Rotating mode needs a valid heading, i.e. a successful query. */
+    hdg = g_PcMapQueryAngle;
+    rot = (g_PcMinimapRotate != 0 && packed != 0);
+    if (rot)
+    {
+        hca = Math_Cos(hdg);
+        hsa = Math_Sin(hdg);
+    }
+
     /* The paper map is only drawn once Harry has actually found it -- HAS_MAP is
      * the same savegame bit the map screen gates on. minimap_require_map=0
      * restores the old always-visible behaviour. */
@@ -699,15 +773,38 @@ void Pc_MinimapUpdate(void)
         s32 mz = (s32)(s16)((packed >> 16) & 0xFFFF);
         int cu = mm_clamp(((mx + MM_HALF_X) * MM_UV_MAX) / (2 * MM_HALF_X), 0, MM_UV_MAX);
         int cv = mm_clamp(((mz + MM_HALF_Z) * MM_UV_MAX) / (2 * MM_HALF_Z), 0, MM_UV_MAX);
-        int half = MM_UV_MAX / (2 * MM_ZOOM);
+        int half  = MM_UV_MAX / (2 * MM_ZOOM);
+        int reach = half;
 
-        u0 = mm_clamp(cu - half, 0, MM_UV_MAX - 2 * half);
-        v0 = mm_clamp(cv - half, 0, MM_UV_MAX - 2 * half);
-        u1 = u0 + 2 * half;
-        v1 = v0 + 2 * half;
+        /* Rotating: the sampled area must stay inside the 0..255 UV range at
+         * EVERY angle. A disc of radius `half` always does once centred in the
+         * window; a rotated square needs its corner radius (half * sqrt2). */
+        if (rot && !round) reach = ((half * 1449) / 1024) + 1;
+        uvHalf = half;
 
-        px = x0 + ((cu - u0) * mmSize) / (u1 - u0);
-        py = y0 + ((cv - v0) * mmSize) / (v1 - v0);
+        u0 = mm_clamp(cu - reach, 0, MM_UV_MAX - 2 * reach);
+        v0 = mm_clamp(cv - reach, 0, MM_UV_MAX - 2 * reach);
+        u1 = u0 + 2 * reach;
+        v1 = v0 + 2 * reach;
+
+        if (rot)
+        {
+            /* Harry's offset from the window centre (doubled, to stay integer),
+             * turned by the inverse heading into screen space. Normally 0,0:
+             * he only leaves the centre when the window is pinned at a map edge. */
+            s32 d2x = (2 * cu) - (u0 + u1);
+            s32 d2y = (2 * cv) - (v0 + v1);
+            s32 ex  = ((d2x * hca) + (d2y * hsa)) >> 12;
+            s32 ey  = ((d2y * hca) - (d2x * hsa)) >> 12;
+
+            px = cx + (ex * mmSize) / (4 * half);
+            py = cy + (ey * mmSize) / (4 * half);
+        }
+        else
+        {
+            px = x0 + ((cu - u0) * mmSize) / (u1 - u0);
+            py = y0 + ((cv - v0) * mmSize) / (v1 - v0);
+        }
     }
     else
     {
@@ -755,8 +852,13 @@ void Pc_MinimapUpdate(void)
 
             if (haveMap)
             {
-                s32 nx0 = 2048 + (c0 >> 1), ny0 = 2048 + (n0 >> 1);
-                s32 nx1 = 2048 + (c1 >> 1), ny1 = 2048 + (n1 >> 1);
+                /* Screen vertices stay put; only the UV circle is turned. */
+                s32 r0x = rot ? (((c0 * hca) - (n0 * hsa)) >> 12) : c0;
+                s32 r0y = rot ? (((c0 * hsa) + (n0 * hca)) >> 12) : n0;
+                s32 r1x = rot ? (((c1 * hca) - (n1 * hsa)) >> 12) : c1;
+                s32 r1y = rot ? (((c1 * hsa) + (n1 * hca)) >> 12) : n1;
+                s32 nx0 = 2048 + (r0x >> 1), ny0 = 2048 + (r0y >> 1);
+                s32 nx1 = 2048 + (r1x >> 1), ny1 = 2048 + (r1y >> 1);
                 setPolyFT3(&s_fan[buf][i]);
                 setRGB0(&s_fan[buf][i], (u8)lum, (u8)lum, (u8)lum);
                 if (semi) setSemiTrans(&s_fan[buf][i], 1);
@@ -797,10 +899,31 @@ void Pc_MinimapUpdate(void)
             setXY4(&s_sqMap[buf], x0, y0, x1, y0, x0, y1, x1, y1);
             s_sqMap[buf].tpage = 0;
             s_sqMap[buf].clut  = MM_CLUT;
+            if (rot)
+            {
+                static const int sgx[4] = { -1,  1, -1, 1 };
+                static const int sgy[4] = { -1, -1,  1, 1 };
+                int ucx = (u0 + u1) / 2, vcy = (v0 + v1) / 2, q;
+                int ou[4], ov[4];
+
+                for (q = 0; q < 4; q++)
+                {
+                    int ox = sgx[q] * uvHalf, oy = sgy[q] * uvHalf;
+                    ou[q] = mm_clamp(ucx + (((ox * hca) - (oy * hsa)) >> 12), 0, MM_UV_MAX);
+                    ov[q] = mm_clamp(vcy + (((ox * hsa) + (oy * hca)) >> 12), 0, MM_UV_MAX);
+                }
+                s_sqMap[buf].u0 = (u8)ou[0]; s_sqMap[buf].v0 = (u8)ov[0];
+                s_sqMap[buf].u1 = (u8)ou[1]; s_sqMap[buf].v1 = (u8)ov[1];
+                s_sqMap[buf].u2 = (u8)ou[2]; s_sqMap[buf].v2 = (u8)ov[2];
+                s_sqMap[buf].u3 = (u8)ou[3]; s_sqMap[buf].v3 = (u8)ov[3];
+            }
+            else
+            {
             s_sqMap[buf].u0 = (u8)u0; s_sqMap[buf].v0 = (u8)v0;
             s_sqMap[buf].u1 = (u8)u1; s_sqMap[buf].v1 = (u8)v0;
             s_sqMap[buf].u2 = (u8)u0; s_sqMap[buf].v2 = (u8)v1;
             s_sqMap[buf].u3 = (u8)u1; s_sqMap[buf].v3 = (u8)v1;
+            }
         }
         else
         {
@@ -818,7 +941,7 @@ void Pc_MinimapUpdate(void)
     {
         static const s32 lx[3] = {  0, -3,  3 };
         static const s32 ly[3] = { -5,  3,  3 };
-        q3_12 ang = g_PcMapQueryAngle;
+        q3_12 ang = rot ? (q3_12)0 : g_PcMapQueryAngle; /* rotating: map turns, arrow stays up */
         s32   ca  = Math_Cos(ang), sa = Math_Sin(ang);
         s32   vx[3], vy[3];
         for (i = 0; i < 3; i++)
@@ -846,6 +969,7 @@ void Pc_MinimapUpdate(void)
         vw.cx = cx; vw.cy = cy; vw.R = R; vw.round = round;
         vw.u0 = u0; vw.v0 = v0; vw.u1 = u1; vw.v1 = v1;
         vw.size = mmSize; vw.lum = lum; vw.semi = semi;
+        vw.rot = rot; vw.ca = hca; vw.sa = hsa; vw.uvHalf = uvHalf;
         markCount = mm_markers_build(buf, &vw);
     }
 
