@@ -46,7 +46,7 @@ typedef struct {
  * the overlays get compiled-in UTF-8 like CJK. */
 #include "lang_quick_ar.inc"
 
-enum { QL_ENGLISH = 0, QL_RUSSIAN, QL_PACK, QL_PAL, QL_JA, QL_ZH, QL_AR };
+enum { QL_ENGLISH = 0, QL_RUSSIAN, QL_PACK, QL_PAL, QL_JA, QL_ZH, QL_AR, QL_TH };
 
 /* The script the language is written in, whether or not a face can draw it. */
 static int QuickScriptWanted(void)
@@ -62,6 +62,7 @@ static int QuickScriptWanted(void)
 
         return (font == LANG_PACK_FONT_SJIS)    ? LANG_QUICK_SCRIPT_JAPANESE
              : (font == LANG_PACK_FONT_CHINESE) ? LANG_QUICK_SCRIPT_CHINESE
+             : (font == LANG_PACK_FONT_THAI)    ? LANG_QUICK_SCRIPT_THAI
                                                 : LANG_QUICK_SCRIPT_LATIN;
     }
     if (g_GameRegion == Region_JPN)
@@ -145,14 +146,30 @@ static const char* const s_FacesAr[] = {
     "/System/Library/Fonts/Supplemental/Arial.ttf",
 };
 
+/* Thai: stb_truetype cannot shape, but Thai marks are zero-advance glyphs placed
+ * by their own bearings, which most faces draw correctly unshaped. The bake
+ * draws a whole line in one face, so it must carry Latin too (probed below).
+ * gamedata/font/thai.otf (Loma, GPL with font exception) ships with the port. */
+static const char* const s_FacesTh[] = {
+    "gamedata/font/thai.otf",
+    "gamedata/font/thai.ttf",
+    "C:/Windows/Fonts/LeelawUI.ttf",
+    "C:/Windows/Fonts/tahoma.ttf",
+    "/usr/share/fonts/opentype/tlwg/Loma.otf",
+    "/usr/share/fonts/truetype/tlwg/Loma.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+    "/system/fonts/NotoSansThai-Regular.ttf",                        /* Android */
+    "/system/fonts/DroidSansThai.ttf",
+};
+
 /* The first face in the list that really draws the script, by asking it for a
  * glyph only that script has -- a file that exists but lacks them would turn
  * every label into empty boxes. Read once per script per run; NULL if none. */
 static const char* ScriptFace(int script)
 {
-    static const char* const names[4] = { "Latin", "Japanese", "Chinese", "Arabic" };
-    static const char* s_Found[4];
-    static int         s_Probed[4];
+    static const char* const names[5] = { "Latin", "Japanese", "Chinese", "Arabic", "Thai" };
+    static const char* s_Found[5];
+    static int         s_Probed[5];
     const char* const* list;
     int                count;
     int                probe;
@@ -174,6 +191,11 @@ static const char* ScriptFace(int script)
             list  = s_FacesAr;
             count = (int)(sizeof(s_FacesAr) / sizeof(s_FacesAr[0]));
             probe = 0xFEFB; /* lam-alef: a face with Arabic but no Forms-B lacks it */
+            break;
+        case LANG_QUICK_SCRIPT_THAI:
+            list  = s_FacesTh;
+            count = (int)(sizeof(s_FacesTh) / sizeof(s_FacesTh[0]));
+            probe = 0x0E01; /* ko kai */
             break;
         default:
             return NULL;
@@ -200,7 +222,8 @@ static const char* ScriptFace(int script)
             stbtt_FindGlyphIndex(&info, probe) != 0 &&
             /* The bake draws a whole line in one face, and Arabic lines carry
              * Latin key names (Esc, PgUp); an Arabic-only face would box them. */
-            (script != LANG_QUICK_SCRIPT_ARABIC || stbtt_FindGlyphIndex(&info, 'E') != 0))
+            ((script != LANG_QUICK_SCRIPT_ARABIC && script != LANG_QUICK_SCRIPT_THAI) ||
+             stbtt_FindGlyphIndex(&info, 'E') != 0))
         {
             s_Found[script] = list[i];
         }
@@ -213,7 +236,8 @@ static const char* ScriptFace(int script)
     else
         SH_WARN("[LANG] no %s font found on this system (or gamedata/font/%s) - "
                 "the quick menu and its panels stay in English",
-                names[script], script == LANG_QUICK_SCRIPT_ARABIC ? "arabic.ttf" : "cjk.ttc");
+                names[script], script == LANG_QUICK_SCRIPT_ARABIC ? "arabic.ttf"
+                                                : (script == LANG_QUICK_SCRIPT_THAI ? "thai.otf" : "cjk.ttc"));
     return s_Found[script];
 }
 
@@ -288,6 +312,10 @@ static int QuickLang(void)
             return (Pc_LangQuickScript() == LANG_QUICK_SCRIPT_CHINESE) ? QL_ZH : QL_ENGLISH;
         case LANG_QUICK_SCRIPT_ARABIC:
             return (Pc_LangQuickScript() == LANG_QUICK_SCRIPT_ARABIC) ? QL_AR : QL_ENGLISH;
+        /* The pack's QUICK. lines are UTF-8 Thai; its MENU lines are game-font
+         * syllable codes, so the menu mirror stays English (see Pc_LangQuickMenu). */
+        case LANG_QUICK_SCRIPT_THAI:
+            return (Pc_LangQuickScript() == LANG_QUICK_SCRIPT_THAI) ? QL_TH : QL_ENGLISH;
         default:
             break;
     }
@@ -482,6 +510,7 @@ const char* Pc_LangQuick(const char* en)
                 if (strcmp(en, text[i].en) == 0) return text[i].ru;
             return en;
         }
+        case QL_TH:
         case QL_PACK:
         {
             char key[160];
