@@ -102,6 +102,47 @@ static const unsigned char* GlyphBits(unsigned short sjis)
     return &KANJI_FONT_BITS[g * 32];
 }
 
+/* Thai ink extent of a 16x16 1bpp glyph: first and last used column (0..15).
+ * Returns 0 for a blank glyph. */
+static int ThaiInkExtent(const unsigned char* bits, int* lo, int* hi)
+{
+    unsigned int cols = 0;
+    int          row, j;
+
+    for (row = 0; row < 16; row++)
+        cols |= ((unsigned int)bits[row * 2] << 8) | bits[row * 2 + 1];
+    cols &= 0xFFF0u; /* only the 12 authored columns */
+    if (cols == 0)
+        return 0;
+
+    for (j = 0; j < 12 && !((cols >> (15 - j)) & 1); j++)
+    {
+    }
+    *lo = j;
+    for (j = 11; j > 0 && !((cols >> (15 - j)) & 1); j--)
+    {
+    }
+    *hi = j;
+    return 1;
+}
+
+#define THAI_GAP        2 /* 1px drop shadow + 1px spacing */
+#define THAI_BLANK_ADV  5
+
+int Pc_KanjiAdvance(unsigned short sjis)
+{
+    const unsigned char* bits;
+    int                  lo, hi;
+
+    if (!s_UseThai)
+        return 12;
+
+    bits = GlyphBits(sjis);
+    if (bits == 0 || !ThaiInkExtent(bits, &lo, &hi))
+        return THAI_BLANK_ADV;
+    return (hi - lo + 1) + THAI_GAP;
+}
+
 void Pc_KanjiSetChinese(int useChinese)
 {
     useChinese = (useChinese != 0);
@@ -195,13 +236,19 @@ static void RasterizeCell(const unsigned char* bits, int vramX, int vramY)
          * index 1 (white); a 1px shadow to the right/below/diagonal is index 2
          * (dark), like the retail Latin font's. */
         unsigned char ink[16][12];
+        int           lo = 0, hi = 0;
+
+        /* Trim the left bearing: slide the ink to column 0 so the proportional
+         * advance (Pc_KanjiAdvance) packs letters tightly. */
+        if (!ThaiInkExtent(bits, &lo, &hi))
+            lo = 0;
 
         for (row = 0; row < 16; row++)
         {
             unsigned int src = ((unsigned int)bits[row * 2] << 8) | bits[row * 2 + 1];
 
             for (j = 0; j < 12; j++)
-                ink[row][j] = (unsigned char)((src >> (15 - j)) & 1);
+                ink[row][j] = (unsigned char)((j + lo < 12) ? ((src >> (15 - (j + lo))) & 1) : 0);
         }
 
         for (row = 0; row < 16; row++)

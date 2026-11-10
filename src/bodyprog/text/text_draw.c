@@ -551,7 +551,7 @@ bool Gfx_StringDraw(char* str, s32 strLength) // 0x8004A8E8
                 }
             }
 
-            posX += FONT_12X16_GLYPH_SIZE_X;
+            posX += Pc_KanjiAdvance((u16)(((u32)charCode << 8) | strCpy[1]));
             strCpy++; /* trail byte; the loop tail consumes the lead */
         }
         /* Region font layout: same math as the original, with the layout
@@ -860,7 +860,7 @@ s32 Gfx_MapMsg_CalculateWidths(s32 mapMsgIdx) // 0x8004ACF4
                 /* NTSC-J: an SJIS pair is one fixed-width kanji cell. */
                 if (Pc_LangSjisActive() && Pc_KanjiIsLead((u8)charCode) && mapMsg[1] != '\0')
                 {
-                    g_MapMsg_Widths[g_MapMsg_WidthIdx - 1] += FONT_12X16_GLYPH_SIZE_X;
+                    g_MapMsg_Widths[g_MapMsg_WidthIdx - 1] += Pc_KanjiAdvance((u16)(((u32)(u8)charCode << 8) | (u8)mapMsg[1]));
                     mapMsg += 2;
                     break;
                 }
@@ -1346,7 +1346,7 @@ s32 Gfx_MapMsg_StringDraw(char* mapMsg, s32 strLength) // 0x8004AF18
                     }
                 }
 
-                glyphPosX += FONT_12X16_GLYPH_SIZE_X;
+                glyphPosX += Pc_KanjiAdvance((u16)(((u32)(u8)charCode << 8) | ((u8*)mapMsg)[1]));
                 mapMsg    += 2;
 
                 if (strLength <= 0)

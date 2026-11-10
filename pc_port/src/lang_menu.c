@@ -599,7 +599,7 @@ int Pc_LangMenuTextWidth(const char* str)
          * measuring their bytes separately would roughly double the width. */
         if (Pc_LangSjisActive() && Pc_KanjiIsLead(c) && str[1] != '\0')
         {
-            width += FONT_12X16_GLYPH_SIZE_X;
+            width += Pc_KanjiAdvance((unsigned short)((c << 8) | (unsigned char)str[1]));
             str++;
             continue;
         }

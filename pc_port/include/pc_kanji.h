@@ -40,6 +40,12 @@ int  Pc_KanjiChineseActive(void);
 void Pc_KanjiSetThai(int useThai);
 int  Pc_KanjiThaiActive(void);
 
+/* Horizontal advance, in pixels, for an SJIS code. 12 for every JP/CN glyph
+ * (fixed-width cells). A Thai glyph is proportional: its ink width plus a
+ * 2px gap (1px shadow + 1px bearing), so letters sit close together like real
+ * Thai text instead of one per 12px cell. */
+int Pc_KanjiAdvance(unsigned short sjis);
+
 /* The packed CLUT word every kanji/hanzi cell is drawn with. */
 int Pc_KanjiClutId(void);
 
