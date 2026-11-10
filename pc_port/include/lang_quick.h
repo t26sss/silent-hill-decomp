@@ -32,13 +32,14 @@ void Pc_LangUtf8Upper(const char* in, char* out, int outSize);
 unsigned int Pc_LangUtf8Next(const char** pp);
 
 /* Which script the overlays' text is in: 0 Latin/Cyrillic, 1 Japanese,
- * 2 Chinese, 3 Arabic. Latin for a CJK or Arabic language when this system has
+ * 2 Chinese, 3 Arabic, 4 Thai. Latin for a CJK or Arabic language when this system has
  * no face for it (the overlays then show English). An overlay re-picks its
  * font when this changes. */
 #define LANG_QUICK_SCRIPT_LATIN    0
 #define LANG_QUICK_SCRIPT_JAPANESE 1
 #define LANG_QUICK_SCRIPT_CHINESE  2
 #define LANG_QUICK_SCRIPT_ARABIC   3
+#define LANG_QUICK_SCRIPT_THAI    4
 int Pc_LangQuickScript(void);
 
 /* The TrueType faces to try, best first, for that script: the verified CJK or
