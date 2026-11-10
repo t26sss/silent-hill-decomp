@@ -63,6 +63,7 @@ int g_PcMapQueryOnly = 0;
  * its own arrow; this hands the same corrected angle to the minimap. */
 q3_12 g_PcMapQueryAngle = 0;
 
+
 /* Panel geometry in 2D screen space (origin = screen centre; 4:3 is
  * x -160..+160, y -120..+120). Top-left corner, inset a little. */
 #define MM_SIZE   72
@@ -442,9 +443,58 @@ typedef struct
     int u0, v0, u1, v1; /* map-image window currently sampled, in UV units */
     int size;           /* panel edge length */
     int lum, semi;
+    int rot;            /* rotating mode on */
+    s32 ca, sa;         /* Harry's heading, Q12 cos/sin (paper-map space) */
+    int uvHalf;         /* UV half-width shown across the panel edge */
 } s_MmView;
 
 static POLY_FT4 s_markPrim[2][MM_MARK_MAX];
+
+/* Rotating mode draws markings as clipped triangle fans (a rotated rectangle
+ * cannot be cropped by UV like the axis-aligned path), so a mark sliding over
+ * the panel edge is cut by the edge instead of popping in and out. */
+#define MM_MARK_TRI_MAX 96
+#define MM_CLIP_MAX     24
+#define MM_CLIP_SEG     16   /* sides of the polygon that approximates the disc */
+
+static POLY_FT3 s_markTri[2][MM_MARK_TRI_MAX];
+static int      s_markTriCount[2];
+
+typedef struct { float x, y, u, v; } s_MmVtx;
+
+static float mm_side(float ax, float ay, float bx, float by, float px, float py)
+{
+    return ((bx - ax) * (py - ay)) - ((by - ay) * (px - ax));
+}
+
+/* Sutherland-Hodgman against one edge; `cs` (+1/-1) says which side is inside.
+ * UV is interpolated along the cut, which is exact: the map is an affine
+ * function of screen position. */
+static int mm_clip_half(const s_MmVtx* in, int n, s_MmVtx* out,
+                        float ex0, float ey0, float ex1, float ey1, float cs)
+{
+    int i, m = 0;
+
+    for (i = 0; i < n; i++)
+    {
+        const s_MmVtx* a = &in[i];
+        const s_MmVtx* b = &in[(i + 1) % n];
+        float da = mm_side(ex0, ey0, ex1, ey1, a->x, a->y) * cs;
+        float db = mm_side(ex0, ey0, ex1, ey1, b->x, b->y) * cs;
+
+        if (da >= 0.0f && m < MM_CLIP_MAX) out[m++] = *a;
+        if (((da >= 0.0f) != (db >= 0.0f)) && m < MM_CLIP_MAX)
+        {
+            float t = da / (da - db);
+            out[m].x = a->x + ((b->x - a->x) * t);
+            out[m].y = a->y + ((b->y - a->y) * t);
+            out[m].u = a->u + ((b->u - a->u) * t);
+            out[m].v = a->v + ((b->v - a->v) * t);
+            m++;
+        }
+    }
+    return m;
+}
 
 /* Build the visible paper-map markings as textured prims over the map image.
  * Mirrors func_80068E0C's table walk and flag test exactly; only the output
@@ -458,6 +508,7 @@ static int mm_markers_build(int buf, const s_MmView* vw)
     int vh  = vw->v1 - vw->v0;
     int n, i, j, count = 0;
 
+    s_markTriCount[buf] = 0;
     if (!s_markReady || uw <= 0 || vh <= 0) return 0;
     if (idx < 0 || idx >= MM_PAPER_MAP_COUNT) return 0;
     /* Atlas belonging to a DIFFERENT area is still resident (its read has not
@@ -495,6 +546,111 @@ static int mm_markers_build(int buf, const s_MmView* vw)
              * street corner. */
             col0 = (place.field_0 * 2) + (MM_MAP_W / 2);
             row0 = (place.field_1 * 2) + (MM_MAP_H / 2);
+
+            /* Rotating mode: rotate the 4 corners around the panel centre by the
+             * inverse heading, clip the quad to the panel (disc or box), and
+             * draw what is left as a triangle fan. */
+            if (vw->rot)
+            {
+                float    cf  = (float)vw->ca / 4096.0f;
+                float    sf  = (float)vw->sa / 4096.0f;
+                float    ksc = (float)vw->size / (float)(2 * vw->uvHalf);
+                float    ucf = (float)(vw->u0 + vw->u1) * 0.5f;
+                float    vcf = (float)(vw->v0 + vw->v1) * 0.5f;
+                int      cc[4], rr[4], q, n, e;
+                int      au0 = spr.field_0, av0 = spr.field_1;
+                int      au1 = spr.field_0 + spr.field_2, av1 = spr.field_1 + spr.field_3;
+                int      umax = (au1 > MM_UV_MAX) ? MM_UV_MAX : au1;
+                int      vmax = (av1 > MM_UV_MAX) ? MM_UV_MAX : av1;
+                s_MmVtx  bufA[MM_CLIP_MAX], bufB[MM_CLIP_MAX];
+                s_MmVtx* cur = bufA;
+                s_MmVtx* nxt = bufB;
+                float    mcx = (float)vw->cx, mcy = (float)vw->cy;
+
+                /* ring order TL, TR, BR, BL */
+                cc[0] = col0;               rr[0] = row0;
+                cc[1] = col0 + spr.field_2; rr[1] = row0;
+                cc[2] = col0 + spr.field_2; rr[2] = row0 + spr.field_3;
+                cc[3] = col0;               rr[3] = row0 + spr.field_3;
+
+                for (q = 0; q < 4; q++)
+                {
+                    float du = ((float)cc[q] * (float)MM_UV_MAX / (float)MM_MAP_W) - ucf;
+                    float dv = ((float)rr[q] * (float)MM_UV_MAX / (float)MM_MAP_H) - vcf;
+
+                    cur[q].x = mcx + (((du * cf) + (dv * sf)) * ksc);
+                    cur[q].y = mcy + (((dv * cf) - (du * sf)) * ksc);
+                    cur[q].u = (q == 0 || q == 3) ? (float)au0 : (float)au1;
+                    cur[q].v = (q == 0 || q == 1) ? (float)av0 : (float)av1;
+                }
+                n = 4;
+
+                if (vw->round)
+                {
+                    /* Slightly outside the true circle so the 16-gon never cuts
+                     * a mark short of the ring; the black outline covers it. */
+                    float rad = (float)vw->R * 1.01f;
+                    float px0 = mcx + rad, py0 = mcy;
+
+                    for (e = 1; e <= MM_CLIP_SEG && n > 0; e++)
+                    {
+                        q3_12 ca2 = (q3_12)((4096 * e) / MM_CLIP_SEG);
+                        float px1 = mcx + (rad * (float)Math_Cos(ca2) / 4096.0f);
+                        float py1 = mcy + (rad * (float)Math_Sin(ca2) / 4096.0f);
+                        float cs  = (mm_side(px0, py0, px1, py1, mcx, mcy) >= 0.0f) ? 1.0f : -1.0f;
+                        s_MmVtx* tmp;
+
+                        n = mm_clip_half(cur, n, nxt, px0, py0, px1, py1, cs);
+                        tmp = cur; cur = nxt; nxt = tmp;
+                        px0 = px1; py0 = py1;
+                    }
+                }
+                else
+                {
+                    float bx[5], by[5];
+
+                    bx[0] = (float)vw->x0; by[0] = (float)vw->y0;
+                    bx[1] = (float)vw->x1; by[1] = (float)vw->y0;
+                    bx[2] = (float)vw->x1; by[2] = (float)vw->y1;
+                    bx[3] = (float)vw->x0; by[3] = (float)vw->y1;
+                    bx[4] = bx[0];         by[4] = by[0];
+
+                    for (e = 0; e < 4 && n > 0; e++)
+                    {
+                        float cs = (mm_side(bx[e], by[e], bx[e + 1], by[e + 1], mcx, mcy) >= 0.0f) ? 1.0f : -1.0f;
+                        s_MmVtx* tmp;
+
+                        n = mm_clip_half(cur, n, nxt, bx[e], by[e], bx[e + 1], by[e + 1], cs);
+                        tmp = cur; cur = nxt; nxt = tmp;
+                    }
+                }
+                if (n < 3) continue;
+
+                for (q = 1; q + 1 < n && s_markTriCount[buf] < MM_MARK_TRI_MAX; q++)
+                {
+                    POLY_FT3* t = &s_markTri[buf][s_markTriCount[buf]++];
+                    int k[3];
+                    int ux[3], vy[3];
+
+                    k[0] = 0; k[1] = q; k[2] = q + 1;
+                    for (e = 0; e < 3; e++)
+                    {
+                        ux[e] = mm_clamp((int)floorf(cur[k[e]].u + 0.5f), au0, umax);
+                        vy[e] = mm_clamp((int)floorf(cur[k[e]].v + 0.5f), av0, vmax);
+                    }
+                    setPolyFT3(t);
+                    setRGB0(t, (u8)vw->lum, (u8)vw->lum, (u8)vw->lum);
+                    setSemiTrans(t, 1);
+                    setXY3(t,
+                           (int)floorf(cur[k[0]].x + 0.5f), (int)floorf(cur[k[0]].y + 0.5f),
+                           (int)floorf(cur[k[1]].x + 0.5f), (int)floorf(cur[k[1]].y + 0.5f),
+                           (int)floorf(cur[k[2]].x + 0.5f), (int)floorf(cur[k[2]].y + 0.5f));
+                    setUV3(t, (u8)ux[0], (u8)vy[0], (u8)ux[1], (u8)vy[1], (u8)ux[2], (u8)vy[2]);
+                    t->tpage = getTPage(0, 2, 0, 0);
+                    t->clut  = MM_MARK_CLUT;
+                }
+                continue;
+            }
 
             #define MM_COL2X(c) (vw->x0 + ((((c) * MM_UV_MAX) - (vw->u0 * MM_MAP_W)) * vw->size) / (MM_MAP_W * uw))
             #define MM_ROW2Y(r) (vw->y0 + ((((r) * MM_UV_MAX) - (vw->v0 * MM_MAP_H)) * vw->size) / (MM_MAP_H * vh))
@@ -586,6 +742,9 @@ void Pc_MinimapUpdate(void)
     s32       mkScale = 4096;
     int       u0 = 0, v0 = 0, u1 = MM_UV_MAX, v1 = MM_UV_MAX;
     int       markCount = 0;
+    int       rot = 0, uvHalf = 0;
+    s32       hca = 4096, hsa = 0;
+    q3_12     hdg = 0;
     GsOT_TAG* ot;
 
 
@@ -666,6 +825,15 @@ void Pc_MinimapUpdate(void)
     packed = mm_query_at(mm_effective_map_idx());
     g_PcMapQueryOnly  = 0;
 
+    /* Rotating mode needs a valid heading, i.e. a successful query. */
+    hdg = g_PcMapQueryAngle;
+    rot = (g_PcConfig.minimapRotate != 0 && packed != 0);
+    if (rot)
+    {
+        hca = Math_Cos(hdg);
+        hsa = Math_Sin(hdg);
+    }
+
     /* The paper map is only drawn once Harry has actually found it -- HAS_MAP is
      * the same savegame bit the map screen gates on. minimap_require_map=0
      * restores the old always-visible behaviour. */
@@ -699,15 +867,38 @@ void Pc_MinimapUpdate(void)
         s32 mz = (s32)(s16)((packed >> 16) & 0xFFFF);
         int cu = mm_clamp(((mx + MM_HALF_X) * MM_UV_MAX) / (2 * MM_HALF_X), 0, MM_UV_MAX);
         int cv = mm_clamp(((mz + MM_HALF_Z) * MM_UV_MAX) / (2 * MM_HALF_Z), 0, MM_UV_MAX);
-        int half = MM_UV_MAX / (2 * MM_ZOOM);
+        int half  = MM_UV_MAX / (2 * MM_ZOOM);
+        int reach = half;
 
-        u0 = mm_clamp(cu - half, 0, MM_UV_MAX - 2 * half);
-        v0 = mm_clamp(cv - half, 0, MM_UV_MAX - 2 * half);
-        u1 = u0 + 2 * half;
-        v1 = v0 + 2 * half;
+        /* Rotating: the sampled area must stay inside the 0..255 UV range at
+         * EVERY angle. A disc of radius `half` always does once centred in the
+         * window; a rotated square needs its corner radius (half * sqrt2). */
+        if (rot && !round) reach = ((half * 1449) / 1024) + 1;
+        uvHalf = half;
 
-        px = x0 + ((cu - u0) * mmSize) / (u1 - u0);
-        py = y0 + ((cv - v0) * mmSize) / (v1 - v0);
+        u0 = mm_clamp(cu - reach, 0, MM_UV_MAX - 2 * reach);
+        v0 = mm_clamp(cv - reach, 0, MM_UV_MAX - 2 * reach);
+        u1 = u0 + 2 * reach;
+        v1 = v0 + 2 * reach;
+
+        if (rot)
+        {
+            /* Harry's offset from the window centre (doubled, to stay integer),
+             * turned by the inverse heading into screen space. Normally 0,0:
+             * he only leaves the centre when the window is pinned at a map edge. */
+            s32 d2x = (2 * cu) - (u0 + u1);
+            s32 d2y = (2 * cv) - (v0 + v1);
+            s32 ex  = ((d2x * hca) + (d2y * hsa)) >> 12;
+            s32 ey  = ((d2y * hca) - (d2x * hsa)) >> 12;
+
+            px = cx + (ex * mmSize) / (4 * half);
+            py = cy + (ey * mmSize) / (4 * half);
+        }
+        else
+        {
+            px = x0 + ((cu - u0) * mmSize) / (u1 - u0);
+            py = y0 + ((cv - v0) * mmSize) / (v1 - v0);
+        }
     }
     else
     {
@@ -755,8 +946,13 @@ void Pc_MinimapUpdate(void)
 
             if (haveMap)
             {
-                s32 nx0 = 2048 + (c0 >> 1), ny0 = 2048 + (n0 >> 1);
-                s32 nx1 = 2048 + (c1 >> 1), ny1 = 2048 + (n1 >> 1);
+                /* Screen vertices stay put; only the UV circle is turned. */
+                s32 r0x = rot ? (((c0 * hca) - (n0 * hsa)) >> 12) : c0;
+                s32 r0y = rot ? (((c0 * hsa) + (n0 * hca)) >> 12) : n0;
+                s32 r1x = rot ? (((c1 * hca) - (n1 * hsa)) >> 12) : c1;
+                s32 r1y = rot ? (((c1 * hsa) + (n1 * hca)) >> 12) : n1;
+                s32 nx0 = 2048 + (r0x >> 1), ny0 = 2048 + (r0y >> 1);
+                s32 nx1 = 2048 + (r1x >> 1), ny1 = 2048 + (r1y >> 1);
                 setPolyFT3(&s_fan[buf][i]);
                 setRGB0(&s_fan[buf][i], (u8)lum, (u8)lum, (u8)lum);
                 if (semi) setSemiTrans(&s_fan[buf][i], 1);
@@ -797,10 +993,31 @@ void Pc_MinimapUpdate(void)
             setXY4(&s_sqMap[buf], x0, y0, x1, y0, x0, y1, x1, y1);
             s_sqMap[buf].tpage = 0;
             s_sqMap[buf].clut  = MM_CLUT;
+            if (rot)
+            {
+                static const int sgx[4] = { -1,  1, -1, 1 };
+                static const int sgy[4] = { -1, -1,  1, 1 };
+                int ucx = (u0 + u1) / 2, vcy = (v0 + v1) / 2, q;
+                int ou[4], ov[4];
+
+                for (q = 0; q < 4; q++)
+                {
+                    int ox = sgx[q] * uvHalf, oy = sgy[q] * uvHalf;
+                    ou[q] = mm_clamp(ucx + (((ox * hca) - (oy * hsa)) >> 12), 0, MM_UV_MAX);
+                    ov[q] = mm_clamp(vcy + (((ox * hsa) + (oy * hca)) >> 12), 0, MM_UV_MAX);
+                }
+                s_sqMap[buf].u0 = (u8)ou[0]; s_sqMap[buf].v0 = (u8)ov[0];
+                s_sqMap[buf].u1 = (u8)ou[1]; s_sqMap[buf].v1 = (u8)ov[1];
+                s_sqMap[buf].u2 = (u8)ou[2]; s_sqMap[buf].v2 = (u8)ov[2];
+                s_sqMap[buf].u3 = (u8)ou[3]; s_sqMap[buf].v3 = (u8)ov[3];
+            }
+            else
+            {
             s_sqMap[buf].u0 = (u8)u0; s_sqMap[buf].v0 = (u8)v0;
             s_sqMap[buf].u1 = (u8)u1; s_sqMap[buf].v1 = (u8)v0;
             s_sqMap[buf].u2 = (u8)u0; s_sqMap[buf].v2 = (u8)v1;
             s_sqMap[buf].u3 = (u8)u1; s_sqMap[buf].v3 = (u8)v1;
+            }
         }
         else
         {
@@ -818,7 +1035,7 @@ void Pc_MinimapUpdate(void)
     {
         static const s32 lx[3] = {  0, -3,  3 };
         static const s32 ly[3] = { -5,  3,  3 };
-        q3_12 ang = g_PcMapQueryAngle;
+        q3_12 ang = rot ? (q3_12)0 : g_PcMapQueryAngle; /* rotating: map turns, arrow stays up */
         s32   ca  = Math_Cos(ang), sa = Math_Sin(ang);
         s32   vx[3], vy[3];
         for (i = 0; i < 3; i++)
@@ -846,6 +1063,7 @@ void Pc_MinimapUpdate(void)
         vw.cx = cx; vw.cy = cy; vw.R = R; vw.round = round;
         vw.u0 = u0; vw.v0 = v0; vw.u1 = u1; vw.v1 = v1;
         vw.size = mmSize; vw.lum = lum; vw.semi = semi;
+        vw.rot = rot; vw.ca = hca; vw.sa = hsa; vw.uvHalf = uvHalf;
         markCount = mm_markers_build(buf, &vw);
     }
 
@@ -855,6 +1073,11 @@ void Pc_MinimapUpdate(void)
     AddPrim(ot, &s_mark[buf]);
     for (i = 0; i < markCount; i++)
         AddPrim(ot, &s_markPrim[buf][i]);
+    if (haveMap)
+    {
+        for (i = 0; i < s_markTriCount[buf]; i++)
+            AddPrim(ot, &s_markTri[buf][i]);
+    }
     if (round)
     {
         for (i = 0; i < MM_SEG; i++)
