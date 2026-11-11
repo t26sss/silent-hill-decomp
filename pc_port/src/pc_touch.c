@@ -796,10 +796,11 @@ static int Tc_FixedStick(void)
     return g_PcConfig.touchStyle == TouchStyle_ContextFixed;
 }
 
-/* Where the pinned stick lives, in the same space as the button table. Lower
- * left, clear of Fire and of the corner buttons. */
-#define TC_FIXED_STICK_CX 0.170f
-#define TC_FIXED_STICK_CY 0.740f
+/* Where the pinned stick lives: the Gamepad style's stick centre, so a thumb
+ * finds it in the same place in either style. That one is laid out in height
+ * units from the left edge; this is its width fraction on the screen at hand. */
+#define TC_FIXED_STICK_CX (TG_STICK_CX / Tc_Aspect())
+#define TC_FIXED_STICK_CY TG_STICK_CY
 
 /* A scripted scene, as opposed to message or examine text. A tap in an advance
  * state injects enter and ONLY enter (s_AdvanceHeld below), which advances text
@@ -950,6 +951,29 @@ static unsigned char Tc_AxisByte(float v)
     return (unsigned char)b;
 }
 
+/* The stick as the game is to read it. The game takes no notice of a stick
+ * until an axis passes half deflection (STICK_THRESHOLD), so sent as measured
+ * the inner half of the ring did nothing: a thumb resting inside a pinned
+ * stick could not move at all, and only a push out past the rim did. The
+ * dead middle is the touch stick's own small one; past it the leading axis
+ * starts at the game's threshold and runs up to full, the other in proportion,
+ * so the direction pushed is the direction taken. */
+static void Tc_StickOut(float ux, float uy, float mag, unsigned char* outX, unsigned char* outY)
+{
+    const float ax  = (ux < 0.0f) ? -ux : ux;
+    const float ay  = (uy < 0.0f) ? -uy : uy;
+    const float big = (ax > ay) ? ax : ay;
+    const float m   = 0.52f + (0.48f * mag);
+
+    if (big <= 0.0f)
+    {
+        *outX = *outY = 128;
+        return;
+    }
+    *outX = Tc_AxisByte((ux / big) * m);
+    *outY = Tc_AxisByte((uy / big) * m);
+}
+
 /* Press whatever the player has bound to an action. Reading the live config
  * rather than hardcoding Cross/Square means a rebound pad keeps working, and
  * the region/difficulty defaults come along for free. */
@@ -1012,6 +1036,13 @@ static int Tc_SoloOwnPos(int b)
     return b == TB_NO;
 }
 
+/* The one rule for whether Fire is on screen, for the draw loop and the hit
+ * test alike. */
+static int Tc_FireShown(void)
+{
+    return !g_PcConfig.oneButtonCombat && s_Buttons[TB_AIM].holdFrames > 0;
+}
+
 static int Tc_HitButton(float x, float y, float aspect)
 {
     int i;
@@ -1023,6 +1054,15 @@ static int Tc_HitButton(float x, float y, float aspect)
         if (Tc_CornerOnly(i) || Tc_ScreenOnly(i))
             continue;
         if ((i == TB_QSAVE || i == TB_QLOAD) && !Tc_QuickButtonsOn())
+            continue;
+        /* Fire is only there while Aim is held, and the draw loop hides it the
+         * rest of the time; the hit test did not. Its circle is a fifth of the
+         * screen's height across, in the steering corner, so a thumb landing
+         * inside it was a press of a button nobody could see and never
+         * reached the stick: with the stick pinned there the middle of the
+         * ring was dead and it only answered to a touch beside it, and with
+         * the floating stick a landing in that corner did nothing. */
+        if (i == TB_FIRE && !Tc_FireShown())
             continue;
 
         float dx = (x - s_Buttons[i].cx) * aspect;
@@ -1130,6 +1170,21 @@ static void Tc_PlaceCamButton(float aspect)
 {
     s_Buttons[TB_CAM].cx = s_Buttons[TB_MENU].cx + (0.135f / aspect);
     s_Buttons[TB_CAM].cy = s_Buttons[TB_MENU].cy;
+
+    /* Fire's own corner is where the pinned stick lives. With that style it
+     * stands directly above the ring instead, so while aiming the thumb has
+     * both: the stick still takes a touch in its middle, and Fire is a short
+     * reach up from it. */
+    if (Tc_FixedStick())
+    {
+        s_Buttons[TB_FIRE].cx = TC_FIXED_STICK_CX;
+        s_Buttons[TB_FIRE].cy = TC_FIXED_STICK_CY - TC_STICK_RADIUS - s_Buttons[TB_FIRE].r - 0.020f;
+    }
+    else
+    {
+        s_Buttons[TB_FIRE].cx = 0.095f;
+        s_Buttons[TB_FIRE].cy = 0.760f;
+    }
 }
 
 /* Aim is up by any route: the left double tap, the context Aim button, or
@@ -1258,6 +1313,13 @@ void Pc_Touch_Update(void)
     int         present[TC_MAX_FINGERS];
     float       lookDx = 0.0f, lookDy = 0.0f;
     int         winW = 0, winH = 0;
+
+#if defined(__ANDROID__) || defined(SH_IOS)
+    {
+        extern void Pc_PhoneHaptics_Update(void);
+        Pc_PhoneHaptics_Update();
+    }
+#endif
 
     /* BEFORE the mode gate, not inside the per-finger loop below. That loop only
      * runs once touch is already enabled, so the clear it used to hold could
@@ -1708,8 +1770,7 @@ void Pc_Touch_Update(void)
 
                 if (mag > 0.0f && len > 0.0f)
                 {
-                    s_LeftX = Tc_AxisByte((dx / len) * mag);
-                    s_LeftY = Tc_AxisByte((dy / len) * mag);
+                    Tc_StickOut(dx / len, dy / len, mag, &s_LeftX, &s_LeftY);
 
                     /* The d-pad bits as well as the analog position. Gameplay
                      * reads the stick, but the inventory, the map screen and
@@ -1797,8 +1858,7 @@ void Pc_Touch_Update(void)
 
                 if (mag > 0.0f && len > 0.0f)
                 {
-                    s_LeftX = Tc_AxisByte((dx / len) * mag);
-                    s_LeftY = Tc_AxisByte((dy / len) * mag);
+                    Tc_StickOut(dx / len, dy / len, mag, &s_LeftX, &s_LeftY);
                 }
                 else
                 {
@@ -2638,9 +2698,7 @@ void Pc_Touch_Draw(void)
             continue;
 
         /* Fire appears with the gun and goes away with it. */
-        if (i == TB_FIRE &&
-            (mode != TC_MODE_GAMEPLAY || g_PcConfig.oneButtonCombat ||
-             s_Buttons[TB_AIM].holdFrames <= 0))
+        if (i == TB_FIRE && (mode != TC_MODE_GAMEPLAY || !Tc_FireShown()))
             continue;
 
         if (mode != TC_MODE_GAMEPLAY)

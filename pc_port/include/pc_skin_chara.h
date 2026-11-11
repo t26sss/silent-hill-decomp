@@ -38,6 +38,10 @@ void  Pc_SkinChara_End(void* chara, void* ot, int shift, int hideHead);
 int   Pc_SkinChara_KeepsStockPart(void* chara, const char partName[8], int bone);
 /* Reads Character Face Animation's models now rather than on first sight. */
 void  Pc_SkinChara_PreloadBuiltins(void);
+/* The model files changed on disk: forget which ones were not found. */
+void  Pc_SkinChara_FilesChanged(void);
+/* Counts those calls: holders of a preview model drop it when this moves. */
+int   Pc_SkinChara_FilesGen(void);
 /* Transforms and lights a replaced part into the scratch slots without drawing
  * it, for a kept part that reads its seam vertices from there
  * (bodyprog_80055028.c). */
@@ -65,6 +69,12 @@ const char* Pc_SkinChara_CharaFile(const char* name);
  * ranges and GL textures. */
 typedef struct { unsigned texture; int first, count; } PcSkinPreviewMat;
 void* Pc_SkinChara_PreviewLoad(const char* name, const char* file);
+/* That call would return at once: the file is already loaded for that slot. */
+int   Pc_SkinChara_PreviewCached(const char* name, const char* file);
+/* The pose the next PreviewMesh calls build: 18 game bones, each a row-major
+ * rotation (bone -> model) and a joint position, as the rest tables hold
+ * them. NULL goes back to the rest pose. */
+void  Pc_SkinChara_PreviewPose(const float (*rot)[9], const float (*pos)[3]);
 int   Pc_SkinChara_PreviewMesh(void* ch, const float** stream, int* cornerCount,
                                PcSkinPreviewMat* mats, int maxMats, float bounds[6]);
 
