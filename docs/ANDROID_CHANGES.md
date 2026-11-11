@@ -30,6 +30,3 @@ Tools:
   translation file. Always regenerate both together.
 - `story_conv.py`, `build_all.py`: convert the format, check control codes
   (`~J ~C ~S`) against the original, and check lines stay within 20 cells.
-
-## Notes
-- Texture warping near walls (PSX affine look): turn on PGXP in PC Options.
