@@ -3151,6 +3151,29 @@ void MainLoop(void) // 0x80032EE0
                                    g_SavegamePtr != NULL ? (int)g_SavegamePtr->mapIdx : -1);
                         }
                         {
+                            /* What the frames asked of the renderer: many draws or
+                             * binds point at submission, a high cover at fill (a few
+                             * triangles painted over the screen again and again). */
+                            extern unsigned int g_PsxPerfSplits, g_PsxPerfBinds, g_PsxPerfFilterSets, g_PsxPerfTris;
+                            extern unsigned int g_PsxPerfBigTris, g_PsxPerfCharaVerts, g_PsxPerfFrames;
+                            extern double       g_PsxPerfCover, g_PsxPerfCoverWorst;
+                            extern int          g_PsxUsePgxp, g_cfg_textureFilter;
+
+                            if (g_PsxPerfFrames > 0)
+                            {
+                                double n = (double)g_PsxPerfFrames;
+                                SH_DBG("[PERF]   drawn per frame: draws=%.0f binds=%.0f filter-sets=%.0f world tris=%.0f chara verts=%.0f "
+                                       "cover=%.1fx (worst frame %.1fx) oversize tris=%.1f | pgxp=%d filter=%d pplight=%d hero=%d fl=%d",
+                                       g_PsxPerfSplits / n, g_PsxPerfBinds / n, g_PsxPerfFilterSets / n, g_PsxPerfTris / n,
+                                       g_PsxPerfCharaVerts / n, g_PsxPerfCover / n, g_PsxPerfCoverWorst, g_PsxPerfBigTris / n,
+                                       g_PsxUsePgxp, g_cfg_textureFilter, g_PcConfig.perPixelLighting, g_PcConfig.heroLight,
+                                       g_PcConfig.flashlightMode);
+                            }
+                            g_PsxPerfSplits = g_PsxPerfBinds = g_PsxPerfFilterSets = g_PsxPerfTris = 0;
+                            g_PsxPerfBigTris = g_PsxPerfCharaVerts = g_PsxPerfFrames = 0;
+                            g_PsxPerfCover = g_PsxPerfCoverWorst = 0.0;
+                        }
+                        {
                             extern double g_PsyX_GpuMsSum;
                             extern int    g_PsyX_GpuMsCount;
                             g_PsyX_GpuMsSum = 0.0;
@@ -4239,7 +4262,14 @@ void MainLoop(void) // 0x80032EE0
                                      (g_Screen_FadeStatus & 0x7) <= ScreenFadeState_FadeInStart;
             const int uiIsMenu = uiMenuState && !uiWorldOnScreen && !uiFadeOpaque;
 
-            g_PcHorPlusEnabled = uiIsMenu ? 0 : g_PcHorPlusGate;
+            /* Character Select over gameplay lays out like it does on the
+             * title screen (widened native menu, g_PsxWideMenu), but the world
+             * behind it keeps the gameplay gate on, and this pass then framed
+             * the menu as gameplay: zoomed in at 16:9. */
+            extern int Pc_CharaSelect_IsOpen(void);
+            const int uiCharaSelect = Pc_CharaSelect_IsOpen();
+
+            g_PcHorPlusEnabled = (uiIsMenu || uiCharaSelect) ? 0 : g_PcHorPlusGate;
             g_PsxUIOrthoPass   = 1;
             GsDrawOt(&g_OrderingTable2[g_ActiveBufferIdx]);
             g_PsxUIOrthoPass   = 0;

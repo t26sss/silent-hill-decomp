@@ -128,7 +128,7 @@ function Get-Sha256([string]$path) {
 }
 
 # Shipped runtime assets: pc_port/assets/ mirrors the game folder layout
-# (assets/gamedata/decal.png ships as gamedata/decal.png). Both modes package
+# (assets/gamedata/image/decal.png ships as gamedata/image/decal.png). Both modes package
 # from THIS directory — never glob the build folder's gamedata/, which holds
 # the user's disc images and saves. RelPath is the runtime-relative POSIX path
 # used in the zip, the manifest, and the loose-mode asset name.
@@ -153,6 +153,7 @@ function Get-ShippedAssets {
 # it; it ships from its own source folder, pc_port/angle/, json companions
 # included (its Vulkan backend needs vk_swiftshader_icd.json), when present.
 $angleDir = Join-Path $PSScriptRoot "..\pc_port\angle"
+$sdlDir   = Join-Path $PSScriptRoot "..\pc_port\sdl"
 function Get-ShippedRuntimeFiles {
     $objdump = Join-Path $MingwBin "objdump.exe"
     if (-not (Test-Path $objdump)) { throw "objdump not found at $objdump (pass -MingwBin)." }
@@ -175,6 +176,13 @@ function Get-ShippedRuntimeFiles {
 
     if (Test-Path $angleDir) {
         Get-ChildItem $angleDir -File | Where-Object { $_.Extension -in '.dll', '.json' } | ForEach-Object {
+            $out[$_.Name.ToLower()] = [pscustomobject]@{ RelPath = $_.Name; Source = $_.FullName }
+        }
+    }
+    # SDL3 through sdl2-compat (pc_port/sdl/README.md). Laid over the import
+    # walk on purpose: its SDL2.dll is the compat shim and must replace MinGW's.
+    if (Test-Path (Join-Path $sdlDir "SDL3.dll")) {
+        Get-ChildItem $sdlDir -File -Filter "*.dll" | ForEach-Object {
             $out[$_.Name.ToLower()] = [pscustomobject]@{ RelPath = $_.Name; Source = $_.FullName }
         }
     }
@@ -1041,7 +1049,7 @@ if (Test-Path $launcherExe) {
     Write-Host "Warning: launcher exe not found at $launcherExe - not included in this release." -ForegroundColor Yellow
 }
 
-# Shipped runtime assets (manifest path = runtime-relative, e.g. gamedata/decal.png;
+# Shipped runtime assets (manifest path = runtime-relative, e.g. gamedata/image/decal.png;
 # the launcher creates missing dirs on apply, same as maps/). Sourced from
 # pc_port/assets/, remembered here so the upload stage doesn't look in BuildDir.
 $assetSources = @{}

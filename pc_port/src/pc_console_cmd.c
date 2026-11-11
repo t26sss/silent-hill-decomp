@@ -30,6 +30,8 @@
  *                             collision except the ground
  *   BIND <key> <cmds>    - run one or more console commands from a key;
  *                          BIND LIST / UNBIND <key> / UNBINDALL
+ *                          BIND pad:<input> <cmd> (controller) / ADDCONTROL <cmd> / REMOVECONTROL <cmd>
+ *   NEXTGUN / NEXTMELEE    - next owned gun / melee weapon (works with the weapon raised)
  *   ABOUT                - PC port credits (same block the staff roll appends)
  *   PCCREDITS [0|1]      - toggle that block in the staff roll (persists)
  *   LOGA / LOGB          - stamp an incremental A#/B# position mark
@@ -520,6 +522,7 @@ static const char* const HELP_LINES[] = {
     " kf [n]         keyframe viewer: toggle, or view frame n",
     " playas [name]  play as another character (bare = list)",
     " playas next / previous  cycle characters (bindable)",
+    " charmenu (cmenu)  open or close Character Select (bindable)",
     " gpubench       GPU cost of each graphics setting here (stand still ~20 s)",
     " skinini        re-read the character models' .ini files",
     " minimapnomap [0|1]  minimap before the map is found: 0 hide, 1 empty panel",
@@ -1583,6 +1586,15 @@ void Pc_ConsoleExec(const char* line)
             push_lines(DEBUG_PAGE1, (int)(sizeof(DEBUG_PAGE1) / sizeof(DEBUG_PAGE1[0])));
     } else if (strcmp(cmd, "AMBSFX") == 0) {
         cmd_ambsfx(arg);
+    } else if (strcmp(cmd, "NEXTGUN") == 0 || strcmp(cmd, "NEXTMELEE") == 0) {
+        extern const char* Pc_NextWeaponRequest(int guns);
+        const char* why = Pc_NextWeaponRequest(cmd[4] == 'G');
+        if (why != NULL)
+            cprintf("%s", why);
+    } else if (strcmp(cmd, "ADDCONTROL") == 0) {
+        PcBinds_CmdAddControl(arg);
+    } else if (strcmp(cmd, "REMOVECONTROL") == 0) {
+        PcBinds_CmdRemoveControl(arg);
     } else if (strcmp(cmd, "BIND") == 0) {
         PcBinds_CmdBind(arg);
     } else if (strcmp(cmd, "UNBIND") == 0) {
@@ -2547,6 +2559,24 @@ void Pc_ConsoleExec(const char* line)
     } else if (strcmp(cmd, "SKININI") == 0) {
         extern int Pc_SkinChara_ReloadSettings(void);
         cprintf("re-read %d character .ini file(s)", Pc_SkinChara_ReloadSettings());
+    } else if (strcmp(cmd, "CHARMENU") == 0 || strcmp(cmd, "CMENU") == 0) {
+        /* Hosted by the quick menu, which runs its input and freezes the
+         * world under it, so open that first. Again from a key closes both. */
+        extern int  Pc_CharaSelect_IsOpen(void);
+        extern void Pc_CharaSelect_Open(void);
+        extern int  Pc_QuickOptions_IsOpen(void);
+        extern void Pc_QuickOptions_Toggle(void);
+        extern void Pc_QuickOptions_Close(void);
+        if (Pc_CharaSelect_IsOpen()) {
+            Pc_QuickOptions_Close();
+        } else {
+            if (!Pc_QuickOptions_IsOpen())
+                Pc_QuickOptions_Toggle();
+            if (Pc_QuickOptions_IsOpen())
+                Pc_CharaSelect_Open();
+            else
+                cprintf("Character Select is not available here");
+        }
     } else if (strcmp(cmd, "PLAYAS") == 0) {
         extern int         Pc_PlayAs_SetByName(const char* name, int save);
         extern int         Pc_PlayAs_Current(void);
