@@ -201,16 +201,6 @@ void Pc_ApplyActiveControlScheme(void)
     Pc_ApplyControlConfig(g_DebugThirdPersonCam ? &g_PcConfig.altcam : &g_PcConfig.classic);
 }
 
-/* Force the classic (default) control scheme regardless of the active camera.
- * Menus always navigate with the default binds, so an alternate camera's binds
- * (mouse-look / remapped buttons) don't leak into menu navigation. Restored to
- * the camera-matched scheme via Pc_ApplyActiveControlScheme on return to
- * gameplay (driven by Pc_ControlStyleUpdate). */
-void Pc_ApplyClassicControlScheme(void)
-{
-    Pc_ApplyControlConfig(&g_PcConfig.classic);
-}
-
 /* Demo play file buffer pointer - default PSX address needs runtime init */
 typedef struct s_DemoFrameData s_DemoFrameData;
 extern s_DemoFrameData* g_Demo_PlayFileBufferPtr;
@@ -717,6 +707,11 @@ static void ParseArgs(int argc, char* argv[])
             s_RendererArg = argv[i + 1];
             i++;
         }
+        else if (strcmp(argv[i], "-fullshaders") == 0)
+        {
+            extern int g_PsyX_LeanShaders;
+            g_PsyX_LeanShaders = 0;
+        }
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
         {
             printf("Usage: SilentHillPC [options]\n");
@@ -1149,6 +1144,13 @@ int main(int argc, char* argv[])
      * multisampled (the native target is scaled onto it by a blit). */
     {
         extern int g_PcNativeRender;
+        extern float g_cfg_renderScale;
+        g_cfg_renderScale = g_PcConfig.renderScale;
+        {
+            extern int g_PsyX_FrameInterp, g_PsyX_FrameInterpTargetHz;
+            g_PsyX_FrameInterp         = g_PcConfig.frameInterp;
+            g_PsyX_FrameInterpTargetHz = g_PcConfig.frameInterpFps;
+        }
         g_PcNativeRender = g_PcConfig.nativeResolution;
         if (g_PcNativeRender)
             SH_LOG("Render: native PSX resolution, %dx%d window", windowWidth, windowHeight);
@@ -1258,6 +1260,7 @@ int main(int argc, char* argv[])
      * rather than one excluding the other. texture_filter 3..6 is anisotropic,
      * where the value carries the tap count as well as the mode. */
     g_cfg_psxDither = g_PcConfig.dithering ? 1 : 0;
+    { extern int g_cfg_ditherResolution; g_cfg_ditherResolution = g_PcConfig.ditherResolution; }
     switch (g_PcConfig.textureFilter) {
     case 1:  g_cfg_textureFilter = 1; break;
     case 2:  g_cfg_textureFilter = 2; break;

@@ -4,6 +4,7 @@
 #include "pc_title_style.h"
 #include "lang_text.h"
 #include "pc_binds.h"
+#include "pc_game_options.h"
 #include "pc_input_glyphs.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,7 @@ s_PcConfig g_PcConfig = {
     .showConsole    = 0,
     .psxDither      = -1, /* -1 = absent; see the dithering/texture_filter migration */
     .dithering      = 1,  /* PSX ordered dither on, the long-standing default */
+    .ditherResolution = 480,
     .textureFilter  = 0,  /* point sampling */
     .scaling        = 2,  /* bilinear: what the present blit always did */
     .imageAdjustScope = 1, /* world frames only; menus and FMVs left alone */
@@ -76,6 +78,7 @@ s_PcConfig g_PcConfig = {
     .flashlightMode = 0, /* 0=Classic (PSX), 1=Classic+Shadows, 2=Modern, 3=Modern+Shadows */
     .perPixelFlashlight = 0, /* DERIVED from flashlightMode */
     .flashlightShadows  = 1, /* per-pixel flashlight casts real-time shadows (on by default; only visible when perPixelFlashlight is on) */
+    .renderScale          = 1.0f,
     .fogStrength          = 1.10f, /* PSX-matched density; lower reveals more of the widened draw distance */
     .flashlightIntensity  = 1.20f, /* per-pixel flashlight cone brightness scale, 0..6 */
     .flashlightSize       = 3.00f, /* per-pixel flashlight cone coverage multiplier */
@@ -117,6 +120,7 @@ s_PcConfig g_PcConfig = {
     .immersiveFpsHeadTracking = 0, /* FPS view follows head-bone rotation (experiment, off by default) */
     .control2d               = 0, /* 2D screen-relative movement (experiment, off by default) */
     .control2dSnap           = 0, /* 2D control turns into the direction (0), doesn't snap */
+    .control2dHold           = 1, /* fixed cameras: a held direction is a straight world line */
     .minimap                 = 0, /* minimap overlay off by default */
     .anisoLevel              = 8,
     .shadowMapSize           = 1024,
@@ -601,6 +605,16 @@ void PcConfig_Load(const char* path)
             int v = atoi(value);
             if (v >= 0) g_PcConfig.refreshRate = v;
         }
+        else if (strcmp(key, "frame_interp") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.frameInterp = (v < 0 || v > 2) ? 0 : v;
+        }
+        else if (strcmp(key, "frame_interp_fps") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.frameInterpFps = (v < 0) ? 0 : v;
+        }
         else if (strcmp(key, "fps_cap") == 0)
         {
             g_PcConfig.fpsCap = atoi(value);
@@ -675,6 +689,11 @@ void PcConfig_Load(const char* path)
             g_PcConfig.dithering = (atoi(value) != 0);
             s_sawDitherKeys = 1;
         }
+        else if (strcmp(key, "dither_resolution") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.ditherResolution = (v < -1) ? -1 : v;
+        }
         else if (strcmp(key, "texture_filter") == 0)
         {
             int v = atoi(value);
@@ -686,6 +705,13 @@ void PcConfig_Load(const char* path)
         else if (strcmp(key, "image_adjust_scope") == 0)
         {
             g_PcConfig.imageAdjustScope = (atoi(value) != 0);
+        }
+        else if (strcmp(key, "render_scale") == 0)
+        {
+            float f = (float)atof(value);
+            if (f < 0.25f) f = 0.25f;
+            if (f > 1.0f)  f = 1.0f;
+            g_PcConfig.renderScale = f;
         }
         else if (strcmp(key, "native_resolution") == 0)
         {
@@ -1258,6 +1284,10 @@ void PcConfig_Load(const char* path)
         {
             g_PcConfig.control2dSnap = (atoi(value) != 0);
         }
+        else if (strcmp(key, "control_2d_hold") == 0)
+        {
+            g_PcConfig.control2dHold = (atoi(value) != 0);
+        }
         else if (strcmp(key, "minimap") == 0)
         {
             /* 0 = off, 1 = square, 2 = circle. Older configs only ever wrote
@@ -1475,6 +1505,9 @@ else if (strcmp(key, "enable_plugins") == 0)
             extern void Pc_CharaSelect_ConfigKey(const char* name, const char* value);
             Pc_CharaSelect_ConfigKey(key + 12, value);
         }
+        else if (Pc_GameOptions_ConfigKey(key, value))
+        {
+        }
         else if (strncmp(key, "launcher_", 9) == 0)
         {
             /* Launcher-managed keys (launcher_repo_url / _branch / _build) live in
@@ -1573,17 +1606,6 @@ else if (strcmp(key, "enable_plugins") == 0)
         }
         SH_LOG("[CFG] psx_dither = %d migrated to dithering = %d, texture_filter = %d",
                g_PcConfig.psxDither, g_PcConfig.dithering, g_PcConfig.textureFilter);
-    }
-    else
-    {
-        /* The reverse: psxDither is what the in-game Texture_Filter row cycles,
-         * one 8-way value over the pair. Composed here so the row opens on
-         * what is in effect instead of on a stale legacy key -- without this it
-         * showed whatever psx_dither happened to say, which for everyone whose
-         * config has the new keys is the default, not their setting. */
-        g_PcConfig.psxDither = g_PcConfig.dithering ? 1
-                             : (g_PcConfig.textureFilter == 0 ? 0
-                                                              : g_PcConfig.textureFilter + 1);
     }
 
     /* Default migration: reapply a changed persisted DEFAULT to users still sitting

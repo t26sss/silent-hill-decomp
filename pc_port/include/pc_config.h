@@ -65,15 +65,21 @@ typedef struct {
     int preloadChunks;   /* 1 = load all IPD chunks at map init instead of streaming */
     int vsync;           /* 0 = off (uncapped), 1 = on, -1 = adaptive */
     int refreshRate;     /* target refresh rate in hz (0 = display default); fullscreen only */
+    /* Frame interpolation: the game keeps its fps cap and the frames in
+     * between are synthesised up to frameInterpFps (0 = display refresh).
+     * 2 = reprojection-error view. Needs PGXP (config keys: frame_interp,
+     * frame_interp_fps). */
+    int frameInterp;
+    int frameInterpFps;
     int fpsCap;          /* gameplay fps cap: 0 = uncapped, 30 = PSX-accurate, 60 = smooth */
     int weatherSimHz;      /* rain/snow simulation rate: 60 (default) steps it once per rendered
                             * frame, 30 locks it to the console's cadence. Only the frame-stepped
                             * parts differ (snow's random walk, spawn/rest counters, the wind
                             * ramp); fall speed and wind are delta-scaled either way.
                             * (config key: weather_sim_hz, console: WEATHERHZ) */
-    int cutsceneLineGapMs; /* min silence (ms) between cutscene voice lines — simulates PSX CD
-                            * seek latency so tightly-timed lines don't run together. Applied as a
-                            * MINIMUM (never shortens an authored gap). 0 = off. Default 300. */
+    int cutsceneLineGapMs; /* Dialog Pause: the console's wait before each voiced line (stop and
+                            * play tasks, CD seek), replayed by xa_seek_model.c. A scale, not a
+                            * length: 300 is the console, 150 half of it, 600 double, 0 off. */
     /* "Dark Harry" easter egg (pc_dark_harry.c), NOT original-game behaviour.
      * darkHarry 0 = off entirely. afkSec = seconds of no input before he
      * appears; distance = how far out, in world units, which wants to be the
@@ -112,6 +118,13 @@ typedef struct {
      * express. Default on. */
     int dithering;
 
+    /* Where the dither's 4x4 cells fall (config key: dither_resolution):
+     * 0 = one cell per PSX pixel, on the PSX image's grid; N = square cells,
+     * N of them down the 3D view; -1 = one per rendered pixel. Default 480,
+     * the nearest choice to the fixed two-pixel cell of earlier builds at
+     * 1080p. */
+    int ditherResolution;
+
     /* Texture filtering, dither excluded (config key: texture_filter):
      * 0 = off (point), 1 = bilinear, 2 = trilinear, 3..6 = anisotropic
      * 2x/4x/8x/16x. */
@@ -127,6 +140,9 @@ typedef struct {
      * picture in the window. width/height are then only the window size. Off
      * by default (config key: native_resolution). */
     int nativeResolution;
+    /* Internal render size as a fraction of the window (or of the borderless
+     * render size), 0.25..1.0; ignored by Native (PSX) (config key: render_scale). */
+    float renderScale;
     int widescreenMode;  /* 0 = pillarbox (PSX-faithful, default), 1 = Hor+ (extra side content), 2 = stretch */
     int menuPillarbox;   /* 1 = pillarbox 2D screens (menus/load) with 4:3 black bars instead of stretching to fill (config key: menu_pillarbox) */
     int allowLooseFiles; /* 1 = scan gamedata/load/{folder}/{name}.{ext} before CD read (texture mod support) */
@@ -295,6 +311,7 @@ typedef struct {
     int immersiveFpsHeadTracking; /* 1 = FPS view direction follows Harry's animated head-bone rotation (idle sway/lean), mouse layered on top (config key: immersive_fps_head_tracking) */
     int control2d;          /* 1 = 2D screen-relative movement (input aligns with the camera; Harry turns to face the move direction) under ALL non-FPS camera styles (config key: control_2d) — an Experiment, off by default */
     int control2dSnap;      /* 1 = 2D control snaps Harry instantly to the input direction instead of turning into it (config key: control_2d_snap); default 0 */
+    int control2dHold;      /* 1 = under the fixed cameras a held 2D direction keeps its world line while the camera turns (config key: control_2d_hold); 0 = re-read from the picture every frame */
     int disableDpadMovement; /* 1 = the controller D-pad no longer drives movement, freeing those D-pad inputs to be bound to other actions (config key: disable_dpad_movement); default 0 */
     int menuFilter;          /* 1 = bilinear-filter menus / 2D screens, independent of the in-game texture Filtering mode; default 0 (config key: menu_filter) */
     int minimap;             /* minimap overlay: 0 = off, 1 = square, 2 = circle (config key: minimap); default 0 */

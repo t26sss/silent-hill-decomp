@@ -1075,6 +1075,9 @@ void Sd_XaAudioPlayTaskAdd(u16 sfx) // 0x80046D3C
 
     if (g_XaItemData[g_Sd_AudioWork.xaAudioIdxCheck_2].xaFileIdx_0 != 0)
     {
+#ifdef SH_PC_PORT
+        Pc_XaSeek_PlayRequest(g_Sd_AudioWork.xaAudioIdxCheck_2);
+#endif
         D_800C37DC         = true;
         D_800C1688.field_8 = VSync(SyncMode_Count);
         D_800C1688.field_4 = 0;
@@ -1235,6 +1238,9 @@ void Sd_XaPreLoadAudioTaskAdd(s32 xaIdx) // 0x800472BC
 {
     g_Sd_AudioWork.xaAudioIdxCheck_2 = xaIdx & 0xFFF;
     D_800C37DC                       = true;
+#ifdef SH_PC_PORT
+    Pc_XaSeek_PreloadRequest(g_Sd_AudioWork.xaAudioIdxCheck_2);
+#endif
 
     if (g_Sd_AudioWork.xaAudioIdx_4 != 0)
     {
@@ -1329,6 +1335,9 @@ void Sd_XaAudioStopTaskAdd(void) // 0x8004760C
 {
     Sd_TaskPoolAdd(2);
     g_Sd_AudioWork.isXaNotPlaying_16 = true;
+#ifdef SH_PC_PORT
+    Pc_XaSeek_StopRequest();
+#endif
 }
 
 void Sd_XaAudioStop(void) // 0x80047634
@@ -1435,6 +1444,15 @@ void Sd_TaskPoolAdd(u8 task) // 0x800478DC
     static s32 i;
     static s32 y;
 
+#ifdef SH_PC_PORT
+    /* The voice tasks reach the seek model through their requests, which know
+     * the line. Everything else in the queue delays a line just the same. */
+    if (task != 1 && task != 2 && task != 6)
+    {
+        Pc_XaSeek_TaskAdd(task, gSDVolConfig.volumeBgm_8, g_Sd_AudioWork.lastVabAudioLoadedIdx_8);
+    }
+#endif
+
     // If `task` is 2, shift field next to element containing value that matches 1 in `g_Sd_TaskPool`.
     if (task == 2)
     {
@@ -1520,6 +1538,9 @@ void Sd_SetReverbEnable(s32 mode) // 0x80047AFC
 
 void Sd_VabLoad_TaskAdd(s32 cmd) // 0x80047B24
 {
+#ifdef SH_PC_PORT
+    Pc_XaSeek_StopIfActive();
+#endif
     if (g_Sd_AudioWork.xaAudioIdx_4 != 0)
     {
         Sd_TaskPoolAdd(2);
@@ -1807,6 +1828,9 @@ void Sd_KdtLoad_TaskAdd(u16 songIdx) // 0x80048244
         return;
     }
 
+#ifdef SH_PC_PORT
+    Pc_XaSeek_StopIfActive();
+#endif
     if (g_Sd_AudioWork.xaAudioIdx_4 != 0)
     {
         Sd_TaskPoolAdd(2);
@@ -1981,6 +2005,7 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             prevTask = g_Sd_CurrentTask;
         }
     }
+    Pc_XaSeek_Frame();
 #endif
     switch (g_Sd_CurrentTask)
     {
@@ -2013,7 +2038,6 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
              * Sd_XaAudioPlayTaskAdd's queue uses xaAudioIdxCheck_2 (still set). */
             if (PcAudioConfig_UsesSoftwareSpu())
                 SdSetSerialAttr(0, 0, 0);
-            Pc_XaSeek_OnStopTask();
             XaPlayer_Stop();
             Sd_TaskPoolUpdate();
 #else
@@ -2022,7 +2046,23 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             break;
 
         case 6:
+#ifdef SH_PC_PORT
+            {
+                /* The seek model replays this task's seek on the console's
+                 * clock. The port's own runs at once, and would put the head
+                 * the model reads at the clip before the model's seek set off. */
+                extern int      g_PsxCdHeadLba;
+                extern unsigned g_PsxCdHeadEpoch;
+                const int       headLba   = g_PsxCdHeadLba;
+                const unsigned  headEpoch = g_PsxCdHeadEpoch;
+
+                Sd_XaPreLoadAudio();
+                g_PsxCdHeadLba   = headLba;
+                g_PsxCdHeadEpoch = headEpoch;
+            }
+#else
             Sd_XaPreLoadAudio();
+#endif
             break;
 
         case 7:
@@ -2034,6 +2074,15 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             break;
 
         default:
+        {
+#ifdef SH_PC_PORT
+            /* As for task 6: the seek model reads these files on the
+             * console's clock and moves the head it keeps itself. */
+            extern int      g_PsxCdHeadLba;
+            extern unsigned g_PsxCdHeadEpoch;
+            const int       headLba   = g_PsxCdHeadLba;
+            const unsigned  headEpoch = g_PsxCdHeadEpoch;
+#endif
             if (g_Sd_CurrentTask >= 160)
             {
                 Sd_VabLoad();
@@ -2046,7 +2095,12 @@ void Sd_TaskPoolExecute(void) // 0x800485D8
             {
                 Sd_TaskPoolUpdate();
             }
+#ifdef SH_PC_PORT
+            g_PsxCdHeadLba   = headLba;
+            g_PsxCdHeadEpoch = headEpoch;
+#endif
             break;
+        }
     }
 
     if (g_Sd_AudioWork.xaAudioIdx_4 != 0)

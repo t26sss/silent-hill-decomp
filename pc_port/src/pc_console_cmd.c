@@ -205,13 +205,57 @@ static const s_GiveItem GIVE_ITEMS[] = {
     { "CAMERA",          InvItemId_Camera,           1 },
     { "CHEMICAL",        InvItemId_Chemical,         1 },
     { "BLOODPACK",       InvItemId_BloodPack,        1 },
+    /* Keys. Left out until a player lost one and had no way to get it back:
+     * a key missing from the inventory is a dead end at any door that has to
+     * be opened by using it. */
+    { "LOBBYKEY",             InvItemId_LobbyKey,             1 },
+    { "HOUSEKEY",             InvItemId_HouseKey,             1 },
+    { "KEYOFLION",            InvItemId_KeyOfLion,            1 },
+    { "KEYOFWOODMAN",         InvItemId_KeyOfWoodman,         1 },
+    { "KEYOFSCARECROW",       InvItemId_KeyOfScarecrow,       1 },
+    { "LIBRARYRESERVEKEY",    InvItemId_LibraryReserveKey,    1 },
+    { "CLASSROOMKEY",         InvItemId_ClassroomKey,         1 },
+    { "KGORDONKEY",           InvItemId_KGordonKey,           1 },
+    { "DRAWBRIDGEKEY",        InvItemId_DrawbridgeKey,        1 },
+    { "BASEMENTKEY",          InvItemId_BasementKey,          1 },
+    { "BASEMENTSTOREROOMKEY", InvItemId_BasementStoreroomKey, 1 },
+    { "EXAMINATIONROOMKEY",   InvItemId_ExaminationRoomKey,   1 },
+    { "ANTIQUESHOPKEY",       InvItemId_AntiqueShopKey,       1 },
+    { "SEWERKEY",             InvItemId_SewerKey,             1 },
+    { "SEWEREXITKEY",         InvItemId_SewerExitKey,         1 },
+    { "KEYOFOPHIEL",          InvItemId_KeyOfOphiel,          1 },
+    { "KEYOFHAGITH",          InvItemId_KeyOfHagith,          1 },
+    { "KEYOFPHALEG",          InvItemId_KeyOfPhaleg,          1 },
+    { "KEYOFBETHOR",          InvItemId_KeyOfBethor,          1 },
+    { "KEYOFARATRON",         InvItemId_KeyOfAratron,         1 },
+    { "SAFEKEY",              InvItemId_SafeKey,              1 },
+    { "MOTORCYCLEKEY",        InvItemId_MotorcycleKey,        1 },
+    { "BIRDCAGEKEY",          InvItemId_BirdCageKey,          1 },
+    /* notes, puzzle pieces, tools */
+    { "NOTETOSCHOOL",         InvItemId_NoteToSchool,         1 },
+    { "NOTEDOGHOUSE",         InvItemId_NoteDoghouse,         1 },
+    { "PICTURECARD",          InvItemId_PictureCard,          1 },
+    { "RUBBERBALL",           InvItemId_RubberBall,           1 },
+    { "PLATEOFTURTLE",        InvItemId_PlateOfTurtle,        1 },
+    { "PLATEOFHATTER",        InvItemId_PlateOfHatter,        1 },
+    { "PLATEOFCAT",           InvItemId_PlateOfCat,           1 },
+    { "PLATEOFQUEEN",         InvItemId_PlateOfQueen,         1 },
+    { "DISINFECTINGALCOHOL",  InvItemId_DisinfectingAlcohol,  1 },
+    { "RECEIPT",              InvItemId_Receipt,              1 },
+    { "MAGNET",               InvItemId_Magnet,               1 },
+    { "PLIERS",               InvItemId_Pliers,               1 },
+    { "SCREWDRIVER",          InvItemId_Screwdriver,          1 },
+    /* carried gear */
+    { "FLASHLIGHT",           InvItemId_Flashlight,           1 },
+    { "RADIO",                InvItemId_PocketRadio,          1 },
 };
 #define N_GIVE_ITEMS ((int)(sizeof(GIVE_ITEMS) / sizeof(GIVE_ITEMS[0])))
 
 static void give_item(u8 id, u8 count)
 {
     int stackable = (id >= InvItemId_HealthDrink && id <= InvItemId_Ampoule) ||
-                    (id >= InvItemId_HandgunBullets);
+                    (id >= InvItemId_HandgunBullets && id <= InvItemId_ShotgunShells) ||
+                    id == InvItemId_GasolineTank;
     if (stackable || !inventory_has(id))
         Inventory_AddSpecialItem(id, count ? count : 1);
 }
@@ -248,6 +292,22 @@ static void cmd_give(const char* arg)
         g_SavegamePtr->clearGameEndings |= GameEndingFlag_Ufo; /* unlock HyperBlaster fire gate */
         cprintf("Given all weapons + ammo + gas");
         return;
+    }
+    /* `give 67`: the item's number, as the [INV] log lines print it. Only
+     * numbers the table knows, so a typo cannot plant a slot the item screen
+     * has no model or name for. */
+    if (arg[0] >= '0' && arg[0] <= '9') {
+        int id = atoi(arg);
+        for (k = 0; k < N_GIVE_ITEMS; k++) {
+            if (GIVE_ITEMS[k].id == id) {
+                arg = GIVE_ITEMS[k].name;
+                break;
+            }
+        }
+        if (k == N_GIVE_ITEMS) {
+            cprintf("no item numbered %d - see 'help give'", id);
+            return;
+        }
     }
     for (k = 0; k < N_GIVE_ITEMS; k++) {
         if (strcmp(arg, GIVE_ITEMS[k].name) == 0) {
@@ -543,23 +603,39 @@ static const char* const HELP_LINES[] = {
 };
 
 static const char* const HELP_GIVE_PAGE1[] = {
-    "give <item> (page 1/2) - weapons, ammo, recovery:",
+    "give <item> (page 1/3) - weapons, ammo, recovery:",
     " knife pipe rockdrill hammer chainsaw katana axe",
     " handgun rifle shotgun hyperblaster (guns add ammo)",
     " ammo  handgunammo rifleammo shotgunammo",
     " gasoline (chainsaw/drill fuel)",
     " allweapons    all melee + guns + ammo + gas",
     " health healthdrink firstaid ampoule",
-    "type 'help give 2' for story / ending items",
+    "type 'help give 2' for story items, 'help give 3' for keys",
 };
 
 static const char* const HELP_GIVE_PAGE2[] = {
-    "give <item> (page 2/2) - story / ending items:",
+    "give <item> (page 2/3) - story / ending items:",
     " flauros channelingstone plasticbottle aglaophotis",
     " kaufmannkey ringofcontract stoneoftime amulet",
     " crestofmercury ankh dagger disk",
     " goldmedallion silvermedallion lighter videotape",
     " camera chemical bloodpack",
+    "type 'help give 3' for keys, notes and tools",
+};
+
+static const char* const HELP_GIVE_PAGE3[] = {
+    "give <item> (page 3/3) - keys, notes, tools:",
+    " lobbykey housekey keyoflion keyofwoodman keyofscarecrow",
+    " libraryreservekey classroomkey kgordonkey drawbridgekey",
+    " basementkey basementstoreroomkey examinationroomkey",
+    " antiqueshopkey sewerkey sewerexitkey safekey",
+    " motorcyclekey birdcagekey keyofophiel keyofhagith",
+    " keyofphaleg keyofbethor keyofaratron",
+    " notetoschool notedoghouse picturecard rubberball receipt",
+    " plateofturtle plateofhatter plateofcat plateofqueen",
+    " disinfectingalcohol magnet pliers screwdriver",
+    " flashlight radio",
+    "an item number works too: give 67",
 };
 
 /* Up-shift (psx-units) for bottom-anchored message boxes. Was 35 to lift subtitles
@@ -645,7 +721,7 @@ static const char* const s_gbNames[] = {
 #define GB_STEPS ((int)(sizeof(s_gbNames) / sizeof(s_gbNames[0])))
 
 static int          s_gbStep = -1, s_gbFrames;
-static double       s_gbGpu0;
+static double       s_gbGpu0, s_gbPx0;
 static int          s_gbGpuN0;
 static unsigned int s_gbMs0;
 static struct { int texFilter, aniso, pplight, hero, pgxp, flMode, timerWanted; } s_gbSaved;
@@ -683,6 +759,7 @@ void Pc_ConsoleGpuBenchUpdate(void)
     extern double g_PsyX_GpuMsSum;
     extern int    g_PsyX_GpuMsCount;
     extern int    g_PsyX_GpuTimerWanted;
+    extern double g_PsyX_GpuSamplesSum;
 
     if (s_gbStep < 0)
         return;
@@ -690,6 +767,7 @@ void Pc_ConsoleGpuBenchUpdate(void)
     s_gbFrames++;
     if (s_gbFrames == GB_SETTLE) {
         s_gbGpu0  = g_PsyX_GpuMsSum;
+        s_gbPx0   = g_PsyX_GpuSamplesSum;
         s_gbGpuN0 = g_PsyX_GpuMsCount;
         s_gbMs0   = SDL_GetTicks();
         return;
@@ -707,7 +785,8 @@ void Pc_ConsoleGpuBenchUpdate(void)
         double frm = (double)(SDL_GetTicks() - s_gbMs0) / GB_MEASURE;
 
         if (gpu >= 0.0)
-            SH_DBG_ECHO("[GPUBENCH] %-24s gpu %6.2f ms   frame %6.2f ms", s_gbNames[s_gbStep], gpu, frm);
+            SH_DBG_ECHO("[GPUBENCH] %-24s gpu %6.2f ms   frame %6.2f ms   shaded %5.0f Mpx", s_gbNames[s_gbStep], gpu, frm,
+                        (g_PsyX_GpuSamplesSum - s_gbPx0) / n / 1.0e6);
         else
             SH_DBG_ECHO("[GPUBENCH] %-24s gpu    n/a      frame %6.2f ms", s_gbNames[s_gbStep], frm);
     }
@@ -1557,7 +1636,9 @@ void Pc_ConsoleExec(const char* line)
         exit(0);
     } else if (strcmp(cmd, "HELP") == 0) {
         if (strncmp(arg, "GIVE", 4) == 0) {
-            if (strstr(arg, "2"))
+            if (strstr(arg, "3"))
+                push_lines(HELP_GIVE_PAGE3, (int)(sizeof(HELP_GIVE_PAGE3) / sizeof(HELP_GIVE_PAGE3[0])));
+            else if (strstr(arg, "2"))
                 push_lines(HELP_GIVE_PAGE2, (int)(sizeof(HELP_GIVE_PAGE2) / sizeof(HELP_GIVE_PAGE2[0])));
             else
                 push_lines(HELP_GIVE_PAGE1, (int)(sizeof(HELP_GIVE_PAGE1) / sizeof(HELP_GIVE_PAGE1[0])));
@@ -2244,6 +2325,12 @@ void Pc_ConsoleExec(const char* line)
         cprintf("chunk visibility culling: %s (disable_culling=%d)",
                 g_PcConfig.disableCulling ? "OFF (draw everything)" : "ON (retail PVS + frustum)",
                 g_PcConfig.disableCulling);
+    } else if (strcmp(cmd, "NIGHTCULL") == 0) {
+        extern int g_PcNightCull;
+        if (arg[0] == '1') g_PcNightCull = 1;
+        else if (arg[0] == '0') g_PcNightCull = 0;
+        else g_PcNightCull = !g_PcNightCull;
+        cprintf("night cull (drop world faces the dark hides): %s", g_PcNightCull ? "ON" : "OFF");
     } else if (strcmp(cmd, "POLYSIZECULL") == 0) {
         /* PSX GPU parity: hardware rejects triangles whose screen bbox exceeds
          * 1023x511; drawing them is the wedge-poly corruption. Off = A/B the
@@ -2308,6 +2395,39 @@ void Pc_ConsoleExec(const char* line)
         else if (arg[0] == '0') g_PsxMixedShader = 0;
         else g_PsxMixedShader = !g_PsxMixedShader;
         cprintf("mixed-format shader: %s", g_PsxMixedShader ? "ON (fewer draw calls)" : "OFF (one program per format)");
+    } else if (strcmp(cmd, "FRAMEINTERP") == 0) {
+        /* frameinterp 0|1|2 [targetfps] -- 2 shows the reprojection error
+         * (black where the camera-motion estimate is right). */
+        extern int g_PsyX_FrameInterp, g_PsyX_FrameInterpTargetHz, g_PsyX_FrameInterpLastCount;
+        extern int g_PsxUsePgxp;
+        int mode = g_PsyX_FrameInterp, hz = g_PsyX_FrameInterpTargetHz;
+        char b[16];
+        if (arg[0] != 0) {
+            if (strncmp(arg, "check", 5) == 0 || strncmp(arg, "CHECK", 5) == 0) {
+                extern int g_PsyX_FrameInterpCheck;
+                g_PsyX_FrameInterpCheck = 12;
+                cprintf("frame interpolation: logging the next 12 ticks to the log ([FGCHK])");
+            } else
+            if (sscanf(arg, "%d %d", &mode, &hz) < 1) mode = !g_PsyX_FrameInterp;
+            if (mode < 0 || mode > 2) mode = 0;
+            if (hz < 0) hz = 0;
+            g_PcConfig.frameInterp    = g_PsyX_FrameInterp         = mode;
+            g_PcConfig.frameInterpFps = g_PsyX_FrameInterpTargetHz = hz;
+            snprintf(b, sizeof(b), "%d", mode); PcConfig_SaveKeyValue("frame_interp", b);
+            snprintf(b, sizeof(b), "%d", hz);   PcConfig_SaveKeyValue("frame_interp_fps", b);
+        }
+        cprintf("frame interpolation: %s, target %d fps%s, fps_cap %d, +%d frames last tick%s",
+                mode == 2 ? "ERROR VIEW" : mode ? "ON" : "OFF", hz, hz ? "" : " (display)",
+                g_PcConfig.fpsCap, g_PsyX_FrameInterpLastCount,
+                g_PsxUsePgxp ? "" : " -- needs PGXP on");
+    } else if (strcmp(cmd, "LEANSHADER") == 0) {
+        /* leanshader 0|1 -- A/B for the stripped PSX programs used while
+         * texture filtering and flashlight shadows are off. */
+        extern int g_PsyX_LeanShaders;
+        if (arg[0] == '1') g_PsyX_LeanShaders = 1;
+        else if (arg[0] == '0') g_PsyX_LeanShaders = 0;
+        else g_PsyX_LeanShaders = !g_PsyX_LeanShaders;
+        cprintf("lean shaders: %s", g_PsyX_LeanShaders ? "ON" : "OFF (full programs always)");
     } else if (strcmp(cmd, "FLMODE") == 0) {
         /* flmode 0..3 | classic | classicshadows | modern | modernshadows */
         int mode = g_PcConfig.flashlightMode;

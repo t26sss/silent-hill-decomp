@@ -1160,8 +1160,11 @@ void WorldGfx_HeldItemDraw(void) // 0x8003D058
          * took the world's far-push and lost to a leg passing in front. */
         {
             extern int g_PsxActorDepth;
+            extern int g_PsxActorDepthHeld;
             g_PsxActorDepth = 1;
+            g_PsxActorDepthHeld = 1;
             func_80057090(&heldItem->bone.modelInfo, &g_OrderingTable0[g_ActiveBufferIdx], 1, &viewMat, &worldMat, 0);
+            g_PsxActorDepthHeld = 0;
             g_PsxActorDepth = 0;
         }
 #else
@@ -1639,6 +1642,16 @@ void func_8003DA9C(e_CharaId charaId, GsCOORDINATE2* boneCoords, s32 arg2, q3_12
     }
 
     timer = CLAMP(timer, Q12(0.0f), Q12(1.0f));
+#ifdef SH_PC_PORT
+    /* The Larval Stalker's completed fade is invisible, not a stationary
+     * corpse. Its slot deliberately survives until the normal distance-based
+     * cleanup; do not let enhanced lighting/fog keep drawing that spent model. */
+    if (charaId == Chara_LarvalStalker && timer == Q12(1.0f))
+    {
+        g_PcCharaDrawScale = Q12(1.0f);
+        return;
+    }
+#endif
 
     // Something to do with items held by player.
     if (charaId == Chara_Harry)

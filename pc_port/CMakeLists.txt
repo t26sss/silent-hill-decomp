@@ -313,13 +313,16 @@ add_custom_command(TARGET SilentHillPC POST_BUILD
 # and ANGLE's Vulkan backend needs companions that are not DLLs at all
 # (vk_swiftshader_icd.json). Copying the directory keeps the deployed set equal
 # to the source set without a reconfigure.
-if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/angle")
+# macOS: the same directory holds libEGL.dylib + libGLESv2.dylib for the
+# renderer=metal backend (ANGLE's Metal device). make_app.sh moves them into
+# Contents/Frameworks when packaging the app.
+if((WIN32 OR APPLE) AND EXISTS "${CMAKE_SOURCE_DIR}/angle")
     add_custom_command(TARGET SilentHillPC POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CMAKE_SOURCE_DIR}/angle" "$<TARGET_FILE_DIR:SilentHillPC>"
-        COMMENT "Copying ANGLE runtime (D3D11/Vulkan backends)"
+        COMMENT "Copying ANGLE runtime (translated render backends)"
     )
-    message(STATUS "ANGLE runtime found - D3D11/Vulkan render backends will be available")
+    message(STATUS "ANGLE runtime found - translated render backends (D3D11/Vulkan/Metal) will be available")
 else()
     message(STATUS "No pc_port/angle/ - only the native OpenGL backend will be selectable at runtime")
 endif()
@@ -826,6 +829,25 @@ install(TARGETS SilentHillPC RUNTIME DESTINATION bin)
 # =============================================================================
 if(BUILD_TESTING)
     enable_testing()
+
+    # Link the real player initialization, discarding unrelated gameplay code
+    # so this regression runs without SDL, a renderer, a disc, or a save file.
+    # Section garbage collection here uses the ELF linker interface.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(pc_player_info_init_test
+            tests/pc_player_info_init_test.c
+            "${DECOMP_DIR}/src/bodyprog/player_control.c")
+        target_include_directories(pc_player_info_init_test PRIVATE
+            $<TARGET_PROPERTY:SilentHillPC,INCLUDE_DIRECTORIES>)
+        target_compile_definitions(pc_player_info_init_test PRIVATE
+            $<TARGET_PROPERTY:SilentHillPC,COMPILE_DEFINITIONS>)
+        target_compile_options(pc_player_info_init_test PRIVATE
+            $<TARGET_PROPERTY:SilentHillPC,COMPILE_OPTIONS>
+            -ffunction-sections -fdata-sections)
+        target_link_options(pc_player_info_init_test PRIVATE -Wl,--gc-sections)
+        target_link_libraries(pc_player_info_init_test PRIVATE m)
+        add_test(NAME pc_player_info_init_test COMMAND pc_player_info_init_test)
+    endif()
 
     # PSY-Q math used by the flashlight flare's relative-angle calculation.
     add_executable(pc_gte_math_test

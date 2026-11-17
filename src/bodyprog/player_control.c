@@ -37,6 +37,20 @@ extern void vwGetViewAngle(SVECTOR* ang);
 #include <SDL_mouse.h>
 #include <SDL_timer.h>
 
+/* Whether a movement control of the alternate cameras is held: Move, Turn or
+ * Sidestep as bound, or the left stick. */
+int Pc_AltCamMoveInput(void)
+{
+    const s_ControllerConfig* cfg = &g_GameWorkPtr->config.controllerConfig;
+
+    return (g_Controller0->heldBtnFlags &
+            (ControllerFlag_LStickUp   | ControllerFlag_LStickDown  |
+             ControllerFlag_LStickLeft | ControllerFlag_LStickRight |
+             ControllerFlag_DpadUp     | ControllerFlag_DpadDown    |
+             ControllerFlag_DpadLeft   | ControllerFlag_DpadRight   |
+             cfg->stepLeft | cfg->stepRight)) != 0;
+}
+
 /* OTS/TPS free-aim: the user-verified gun-forward "ready" pose, an absolute
  * keyframe in Harry's shared pool that holds correctly for EVERY ranged weapon.
  * The aim is held here (Unk34 would otherwise play backward and drift to ~580);
@@ -81,6 +95,7 @@ static void Player_CrashHandler(int sig) {
 #include "pc_timing.h"
 #include "pc_config.h"
 #include "pc_grab_guard.h"
+#include "pc_inventory_guard.h"
 #include "main/fileinfo.h" /* g_GameRegion — EUR overlay pointer rebase */
 
 /* Called above their definitions. Without a prototype in scope Clang
@@ -1786,6 +1801,47 @@ static bool Pc_ReactionStateStuck(s32 state, s32 bodyKf, s32 upperKf)
 }
 #endif
 
+
+#ifdef SH_PC_PORT
+/* World yaw of the ground direction that runs straight UP THE SCREEN where the
+ * player stands, from the matrix the frame was drawn with.
+ *
+ * The camera's own look yaw is that direction only at the middle of the
+ * picture. Off centre, and the fixed cameras keep Harry off centre in every
+ * tight room, a walk along the look yaw drifts across the screen toward the
+ * vanishing point, so "up" on the stick was visibly not up. The bearing from
+ * the camera to Harry is right for a level camera and wrong for a steep one.
+ * This is the exact answer for both: the ground direction along which his
+ * screen X does not change, pointing the way his screen Y falls. */
+static int Pc_2dScreenUpYaw(const VECTOR3* pos, q3_12* yawOut)
+{
+    extern MATRIX GsWSMATRIX;
+    const MATRIX* m = &GsWSMATRIX;
+    float p[3] = { (float)pos->vx / 16.0f, (float)pos->vy / 16.0f, (float)pos->vz / 16.0f };
+    float v[3], a, b, len;
+    int   i;
+
+    for (i = 0; i < 3; i++)
+        v[i] = ((float)m->m[i][0] * p[0] + (float)m->m[i][1] * p[1] + (float)m->m[i][2] * p[2]) / 4096.0f + (float)m->t[i];
+    /* Behind the camera or on top of it: no screen position to speak of. */
+    if (v[2] < 64.0f)
+        return 0;
+    a = -((float)m->m[0][2] * v[2] - v[0] * (float)m->m[2][2]);
+    b =   (float)m->m[0][0] * v[2] - v[0] * (float)m->m[2][0];
+    if (((float)m->m[1][0] * v[2] - v[1] * (float)m->m[2][0]) * a +
+        ((float)m->m[1][2] * v[2] - v[1] * (float)m->m[2][2]) * b > 0.0f)
+    {
+        a = -a;
+        b = -b;
+    }
+    len = sqrtf(a * a + b * b);
+    if (len < 1.0f)
+        return 0;
+    *yawOut = Q12_ANGLE_NORM_U(ratan2((s32)(a / len * 4096.0f), (s32)(b / len * 4096.0f)) + Q12_ANGLE(360.0f));
+    return 1;
+}
+#endif
+
 void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINATE2* coords) // 0x80071CE8
 {
     SVECTOR       playerAngles;
@@ -2088,6 +2144,7 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                     static s8      s_2dPrevMapIdx  = -1;
                     static s8      s_2dPrevRoomIdx = -1;
                     q3_12 camYaw  = g_TpsCamYaw;
+                    q3_12 lookYaw = g_TpsCamYaw;
                     int   camSnap = 0; /* the fixed cam changed SHOT this frame (teleport OR yaw jump) */
 
                     /* This path stops running while aiming, in scripted scenes
@@ -2118,6 +2175,7 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                         vwGetViewAngle(&camAng);
                         vwGetViewPosition(&camPos);
                         camYaw = Q12_ANGLE_NORM_U(camAng.vy + Q12_ANGLE(360.0f));
+                        lookYaw = camYaw;
 
                         /* Shot change, detected from the CAMERA alone: (a) its position
                          * teleporting — the classic hard cut; (b) its own look yaw jumping
@@ -2129,15 +2187,19 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                         if (s_2dHavePrevCam) {
                             s32   cdx   = camPos.vx - s_2dPrevCamPos.vx;
                             s32   cdz   = camPos.vz - s_2dPrevCamPos.vz;
-                            q3_12 swing = Math_AngleNormalizeSigned(camYaw - s_2dPrevCamYaw);
+                            q3_12 swing = Math_AngleNormalizeSigned(lookYaw - s_2dPrevCamYaw);
                             if ((s64)cdx * cdx + (s64)cdz * cdz > (s64)Q12(3.0f) * Q12(3.0f) ||
                                 ABS(swing) > TIMESTEP_SCALE_30_FPS(g_DeltaTime, Q12_ANGLE(25.0f))) {
                                 camSnap = 1;
                             }
                         }
                         s_2dPrevCamPos  = camPos;
-                        s_2dPrevCamYaw  = camYaw;
+                        s_2dPrevCamYaw  = lookYaw;
                         s_2dHavePrevCam = 1;
+                        /* The stick maps through where he is on screen; the shot-change
+                         * test above stays on the look yaw, which his own running cannot
+                         * move. */
+                        Pc_2dScreenUpYaw(&player->position, &camYaw);
                     } else {
                         /* Orbit cam: the player drives it, it never changes shot. Drop the
                          * fixed-cam history so toggling back to classic doesn't read the
@@ -2187,10 +2249,25 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                             SH_DBG("[2DSNAP] locked heading %d (stick %d, live cam %d)",
                                    (int)s_2dLockHeading, (int)stickYaw, (int)camYaw);
                         }
+                        /* Fixed cameras: a direction, once pushed, is a line in the WORLD
+                         * until the stick is let go or pushed somewhere else. These cameras
+                         * turn to follow Harry, so a direction read off the live picture
+                         * every frame bends as he moves: he could not walk a straight line,
+                         * and holding left or right ran him round the camera. The picture
+                         * is consulted when the player gives a direction, not while he
+                         * holds one. The orbit cameras are the player's own and stay live. */
+                        else if (g_PcConfig.control2dHold && !g_DebugThirdPersonCam && !s_2dLocked) {
+                            s_2dLocked      = 1;
+                            s_2dLockHeading = Q12_ANGLE_NORM_U(camYaw + stickYaw + Q12_ANGLE(360.0f));
+                            s_2dLockStick   = stickYaw;
+                        }
 
                         if (s_2dLocked) {
                             q3_12 delta = Math_AngleNormalizeSigned(stickYaw - s_2dLockStick);
-                            if (ABS(delta) <= Q12_ANGLE(45.0f)) {
+                            /* 30 degrees with a held direction: every step of a D-pad or
+                             * keyboard is a new direction and is read off the picture, while
+                             * a stick still steers finely along the line it is on. */
+                            if (ABS(delta) <= (g_PcConfig.control2dHold ? Q12_ANGLE(30.0f) : Q12_ANGLE(45.0f))) {
                                 targetYaw = Q12_ANGLE_NORM_U(s_2dLockHeading + delta + Q12_ANGLE(360.0f));
                             } else {
                                 s_2dLocked = 0;
@@ -2283,16 +2360,17 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                     int fpsIdleLook = 0;
                     if (g_PcFpsCam && !g_SysWork.playerCombat.isAiming)
                     {
-                        s32 held   = g_Controller0->heldBtnFlags;
-                        int moveIn = (g_sdlKeyboardState[SDL_SCANCODE_W] != 0) ||
-                                     (g_sdlKeyboardState[SDL_SCANCODE_A] != 0) ||
-                                     (g_sdlKeyboardState[SDL_SCANCODE_S] != 0) ||
-                                     (g_sdlKeyboardState[SDL_SCANCODE_D] != 0) ||
-                                     (held & (ControllerFlag_LStickUp   | ControllerFlag_LStickDown  |
-                                              ControllerFlag_LStickLeft | ControllerFlag_LStickRight |
-                                              ControllerFlag_DpadUp     | ControllerFlag_DpadDown    |
-                                              ControllerFlag_DpadLeft   | ControllerFlag_DpadRight));
-                        fpsIdleLook = !moveIn;
+                        fpsIdleLook = !Pc_AltCamMoveInput();
+                    }
+                    /* Turn Left/Right at the classic turn rate. */
+                    {
+                        const s32 held = g_Controller0->heldBtnFlags;
+                        const int turn = ((held & ControllerFlag_DpadRight) ? 1 : 0) - ((held & ControllerFlag_DpadLeft) ? 1 : 0);
+
+                        if (turn != 0)
+                        {
+                            g_TpsCamYaw = Q12_ANGLE_NORM_U(g_TpsCamYaw + turn * turnSpeed + Q12_ANGLE(360.0f));
+                        }
                     }
                     if (fpsIdleLook)
                     {
@@ -2313,17 +2391,24 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                      * dropped-input frame (a preload frame hitch) reads as "released" and
                      * fires the skid-stop "ran into a wall" smack while forward is still held.
                      * Keep bit1, OR the current input into bit0 — matches the |= at ~9941. */
-                    /* Camera-relative movement from the global input system:
-                     * legacy WASD + bound d-pad keys (arrows) + controller left
-                     * stick all drive forward/back/strafe in Harry's (== camera)
-                     * frame. Right stick / mouse own the look (handled in the
-                     * camera). */
+                    /* Camera-relative movement, all of it from the binds (it used
+                     * to read W, A, S and D outright, and took Turn for a second
+                     * pair of strafe keys): Move Up/Down and the left stick walk,
+                     * Sidestep and the stick's sideways push strafe, Turn
+                     * Left/Right turn the camera above, and Harry with it. Right
+                     * stick and mouse own the look (handled in the camera). The
+                     * d-pad bits are the Turn binds or a controller's d-pad;
+                     * Joy_ControllerDataUpdate copies them into the stick flags,
+                     * so a stick flag counts as the stick only without them. */
                     {
+                        const s_ControllerConfig* cfg = &g_GameWorkPtr->config.controllerConfig;
                         s32  held  = g_Controller0->heldBtnFlags;
-                        int  fwd   = (g_sdlKeyboardState[SDL_SCANCODE_W] != 0) || (held & (ControllerFlag_LStickUp    | ControllerFlag_DpadUp));
-                        int  back  = (g_sdlKeyboardState[SDL_SCANCODE_S] != 0) || (held & (ControllerFlag_LStickDown  | ControllerFlag_DpadDown));
-                        int  left  = (g_sdlKeyboardState[SDL_SCANCODE_A] != 0) || (held & (ControllerFlag_LStickLeft  | ControllerFlag_DpadLeft));
-                        int  right = (g_sdlKeyboardState[SDL_SCANCODE_D] != 0) || (held & (ControllerFlag_LStickRight | ControllerFlag_DpadRight));
+                        int  turnL = (held & ControllerFlag_DpadLeft)  != 0;
+                        int  turnR = (held & ControllerFlag_DpadRight) != 0;
+                        int  fwd   = (held & (ControllerFlag_LStickUp   | ControllerFlag_DpadUp))   != 0;
+                        int  back  = (held & (ControllerFlag_LStickDown | ControllerFlag_DpadDown)) != 0;
+                        int  left  = (held & cfg->stepLeft)  || ((held & ControllerFlag_LStickLeft)  && !turnL);
+                        int  right = (held & cfg->stepRight) || ((held & ControllerFlag_LStickRight) && !turnR);
 
                         g_Player_IsMovingForward     = (g_Player_IsMovingForward & 0x2) | (fwd ? 1 : 0);
                         g_Player_IsMovingBackward    = back  ? 1 : 0;
@@ -4840,7 +4925,21 @@ static void Pc_FreeAimGunUpperBody(s_SubCharacter* player, s_PlayerExtra* extra,
                     if (!g_PcInfiniteAmmo)
                     {
                         g_SysWork.playerCombat.currentWeaponAmmo--;
+#ifdef SH_PC_PORT
+                        /* Through the cached index this took a round off whatever item
+                         * sat in that slot when the index was stale: see
+                         * pc_inventory_guard.c. */
+                        {
+                            s32 pcWeaponSlot = Pc_Inventory_WeaponSlot("fire");
+
+                            if (pcWeaponSlot >= 0)
+                            {
+                                g_SavegamePtr->items[pcWeaponSlot].count_1--;
+                            }
+                        }
+#else
                         g_SavegamePtr->items[g_SysWork.playerCombat.weaponInventoryIdx].count_1--;
+#endif
                     }
                     func_8005DC1C(g_Player_EquippedWeaponInfo.attackSfx, &player->position, Q8(0.5f), 0);
                 }
@@ -5546,7 +5645,21 @@ static bool Player_CombatAnimUpdate(s_SubCharacter* player, s_PlayerExtra* extra
                     if (!g_PcInfiniteAmmo)
                     {
                         g_SysWork.playerCombat.currentWeaponAmmo--;
+#ifdef SH_PC_PORT
+                        /* Through the cached index this took a round off whatever item
+                         * sat in that slot when the index was stale: see
+                         * pc_inventory_guard.c. */
+                        {
+                            s32 pcWeaponSlot = Pc_Inventory_WeaponSlot("fire");
+
+                            if (pcWeaponSlot >= 0)
+                            {
+                                g_SavegamePtr->items[pcWeaponSlot].count_1--;
+                            }
+                        }
+#else
                         g_SavegamePtr->items[g_SysWork.playerCombat.weaponInventoryIdx].count_1--;
+#endif
                     }
 
                     func_8005DC1C(g_Player_EquippedWeaponInfo.attackSfx, &player->position, Q8(0.5f), 0);
@@ -11691,11 +11804,16 @@ void Game_PlayerInfoInit(void) // 0x8007E5AC
 
     itemGroupId = INV_ITEM_GROUP(g_SavegamePtr->equippedWeapon);
 
-    // Assign weapon that the player was holding when saving.
+    // Check the bound before reading an item: reserve ammo may be absent.
+    i = INV_ITEM_COUNT_MAX;
     if (itemGroupId == InvItemGroup_MeleeWeapons || itemGroupId == InvItemGroup_GunWeapons)
     {
-        for (i = 0; g_SavegamePtr->items[i].id_0 != g_SavegamePtr->equippedWeapon && i < INV_ITEM_COUNT_MAX; i++);
+        for (i = 0; i < INV_ITEM_COUNT_MAX && g_SavegamePtr->items[i].id_0 != g_SavegamePtr->equippedWeapon; i++);
+    }
 
+    // Assign the saved weapon only if it exists in the inventory.
+    if (i < INV_ITEM_COUNT_MAX)
+    {
         g_SysWork.playerCombat.weaponAttack        = g_SavegamePtr->equippedWeapon + InvItemId_KitchenKnife;
         g_SysWork.playerCombat.currentWeaponAmmo  = g_SavegamePtr->items[i].count_1;
         g_SysWork.playerCombat.weaponInventoryIdx = i;
@@ -11707,7 +11825,7 @@ void Game_PlayerInfoInit(void) // 0x8007E5AC
         else
         {
             for (i = 0;
-                 g_SavegamePtr->items[i].id_0 != (g_SavegamePtr->equippedWeapon + InvItemId_HealthDrink) && i < INV_ITEM_COUNT_MAX;
+                 i < INV_ITEM_COUNT_MAX && g_SavegamePtr->items[i].id_0 != (g_SavegamePtr->equippedWeapon + InvItemId_HealthDrink);
                  i++);
 
             if (i == INV_ITEM_COUNT_MAX)
@@ -11722,6 +11840,13 @@ void Game_PlayerInfoInit(void) // 0x8007E5AC
     }
     else
     {
+        if (itemGroupId == InvItemGroup_MeleeWeapons || itemGroupId == InvItemGroup_GunWeapons)
+        {
+            // A missing saved weapon must not leave an invalid inventory index.
+            g_SavegamePtr->equippedWeapon = InvItemId_Unequipped;
+            g_Inventory_EquippedItem      = InvItemId_Unequipped;
+        }
+
         g_SysWork.playerCombat.weaponAttack        = NO_VALUE;
         g_SysWork.playerCombat.currentWeaponAmmo  = 0;
         g_SysWork.playerCombat.totalWeaponAmmo    = 0;
