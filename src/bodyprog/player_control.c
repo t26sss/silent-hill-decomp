@@ -43,6 +43,20 @@ extern void vwGetViewAngle(SVECTOR* ang);
 #include <SDL_mouse.h>
 #include <SDL_timer.h>
 
+/* Whether a movement control of the alternate cameras is held: Move, Turn or
+ * Sidestep as bound, or the left stick. */
+int Pc_AltCamMoveInput(void)
+{
+    const s_ControllerConfig* cfg = &g_GameWorkPtr->config.controllerConfig;
+
+    return (g_Controller0->heldBtnFlags &
+            (ControllerFlag_LStickUp   | ControllerFlag_LStickDown  |
+             ControllerFlag_LStickLeft | ControllerFlag_LStickRight |
+             ControllerFlag_DpadUp     | ControllerFlag_DpadDown    |
+             ControllerFlag_DpadLeft   | ControllerFlag_DpadRight   |
+             cfg->stepLeft | cfg->stepRight)) != 0;
+}
+
 /* OTS/TPS free-aim: the user-verified gun-forward "ready" pose, an absolute
  * keyframe in Harry's shared pool that holds correctly for EVERY ranged weapon.
  * The aim is held here (Unk34 would otherwise play backward and drift to ~580);
@@ -87,6 +101,7 @@ static void Player_CrashHandler(int sig) {
 #include "pc_timing.h"
 #include "pc_config.h"
 #include "pc_grab_guard.h"
+#include "pc_inventory_guard.h"
 #include "main/fileinfo.h" /* g_GameRegion — EUR overlay pointer rebase */
 
 /* Called above their definitions. Without a prototype in scope Clang
@@ -2302,16 +2317,17 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                     int fpsIdleLook = 0;
                     if (g_PcFpsCam && !g_SysWork.playerCombat.isAiming)
                     {
-                        s32 held   = g_Controller0->heldBtnFlags;
-                        int moveIn = (g_sdlKeyboardState[SDL_SCANCODE_W] != 0) ||
-                                     (g_sdlKeyboardState[SDL_SCANCODE_A] != 0) ||
-                                     (g_sdlKeyboardState[SDL_SCANCODE_S] != 0) ||
-                                     (g_sdlKeyboardState[SDL_SCANCODE_D] != 0) ||
-                                     (held & (ControllerFlag_LStickUp   | ControllerFlag_LStickDown  |
-                                              ControllerFlag_LStickLeft | ControllerFlag_LStickRight |
-                                              ControllerFlag_DpadUp     | ControllerFlag_DpadDown    |
-                                              ControllerFlag_DpadLeft   | ControllerFlag_DpadRight));
-                        fpsIdleLook = !moveIn;
+                        fpsIdleLook = !Pc_AltCamMoveInput();
+                    }
+                    /* Turn Left/Right at the classic turn rate. */
+                    {
+                        const s32 held = g_Controller0->heldBtnFlags;
+                        const int turn = ((held & ControllerFlag_DpadRight) ? 1 : 0) - ((held & ControllerFlag_DpadLeft) ? 1 : 0);
+
+                        if (turn != 0)
+                        {
+                            g_TpsCamYaw = Q12_ANGLE_NORM_U(g_TpsCamYaw + turn * turnSpeed + Q12_ANGLE(360.0f));
+                        }
                     }
                     if (fpsIdleLook)
                     {
@@ -2332,17 +2348,24 @@ void Player_LogicUpdate(s_SubCharacter* player, s_PlayerExtra* extra, GsCOORDINA
                      * dropped-input frame (a preload frame hitch) reads as "released" and
                      * fires the skid-stop "ran into a wall" smack while forward is still held.
                      * Keep bit1, OR the current input into bit0 — matches the |= at ~9941. */
-                    /* Camera-relative movement from the global input system:
-                     * legacy WASD + bound d-pad keys (arrows) + controller left
-                     * stick all drive forward/back/strafe in Harry's (== camera)
-                     * frame. Right stick / mouse own the look (handled in the
-                     * camera). */
+                    /* Camera-relative movement, all of it from the binds (it used
+                     * to read W, A, S and D outright, and took Turn for a second
+                     * pair of strafe keys): Move Up/Down and the left stick walk,
+                     * Sidestep and the stick's sideways push strafe, Turn
+                     * Left/Right turn the camera above, and Harry with it. Right
+                     * stick and mouse own the look (handled in the camera). The
+                     * d-pad bits are the Turn binds or a controller's d-pad;
+                     * Joy_ControllerDataUpdate copies them into the stick flags,
+                     * so a stick flag counts as the stick only without them. */
                     {
+                        const s_ControllerConfig* cfg = &g_GameWorkPtr->config.controllerConfig;
                         s32  held  = g_Controller0->heldBtnFlags;
-                        int  fwd   = (g_sdlKeyboardState[SDL_SCANCODE_W] != 0) || (held & (ControllerFlag_LStickUp    | ControllerFlag_DpadUp));
-                        int  back  = (g_sdlKeyboardState[SDL_SCANCODE_S] != 0) || (held & (ControllerFlag_LStickDown  | ControllerFlag_DpadDown));
-                        int  left  = (g_sdlKeyboardState[SDL_SCANCODE_A] != 0) || (held & (ControllerFlag_LStickLeft  | ControllerFlag_DpadLeft));
-                        int  right = (g_sdlKeyboardState[SDL_SCANCODE_D] != 0) || (held & (ControllerFlag_LStickRight | ControllerFlag_DpadRight));
+                        int  turnL = (held & ControllerFlag_DpadLeft)  != 0;
+                        int  turnR = (held & ControllerFlag_DpadRight) != 0;
+                        int  fwd   = (held & (ControllerFlag_LStickUp   | ControllerFlag_DpadUp))   != 0;
+                        int  back  = (held & (ControllerFlag_LStickDown | ControllerFlag_DpadDown)) != 0;
+                        int  left  = (held & cfg->stepLeft)  || ((held & ControllerFlag_LStickLeft)  && !turnL);
+                        int  right = (held & cfg->stepRight) || ((held & ControllerFlag_LStickRight) && !turnR);
 
                         g_Player_IsMovingForward     = (g_Player_IsMovingForward & 0x2) | (fwd ? 1 : 0);
                         g_Player_IsMovingBackward    = back  ? 1 : 0;
@@ -5001,7 +5024,21 @@ static void Pc_FreeAimGunUpperBody(s_SubCharacter* player, s_PlayerExtra* extra,
                     if (!g_PcInfiniteAmmo)
                     {
                         g_SysWork.playerCombat.currentWeaponAmmo--;
+#ifdef SH_PC_PORT
+                        /* Through the cached index this took a round off whatever item
+                         * sat in that slot when the index was stale: see
+                         * pc_inventory_guard.c. */
+                        {
+                            s32 pcWeaponSlot = Pc_Inventory_WeaponSlot("fire");
+
+                            if (pcWeaponSlot >= 0)
+                            {
+                                g_SavegamePtr->items[pcWeaponSlot].count_1--;
+                            }
+                        }
+#else
                         g_SavegamePtr->items[g_SysWork.playerCombat.weaponInventoryIdx].count_1--;
+#endif
                     }
                     func_8005DC1C(g_Player_EquippedWeaponInfo.attackSfx, &player->position, Q8(0.5f), 0);
                 }
@@ -5707,7 +5744,21 @@ static bool Player_CombatAnimUpdate(s_SubCharacter* player, s_PlayerExtra* extra
                     if (!g_PcInfiniteAmmo)
                     {
                         g_SysWork.playerCombat.currentWeaponAmmo--;
+#ifdef SH_PC_PORT
+                        /* Through the cached index this took a round off whatever item
+                         * sat in that slot when the index was stale: see
+                         * pc_inventory_guard.c. */
+                        {
+                            s32 pcWeaponSlot = Pc_Inventory_WeaponSlot("fire");
+
+                            if (pcWeaponSlot >= 0)
+                            {
+                                g_SavegamePtr->items[pcWeaponSlot].count_1--;
+                            }
+                        }
+#else
                         g_SavegamePtr->items[g_SysWork.playerCombat.weaponInventoryIdx].count_1--;
+#endif
                     }
 
                     func_8005DC1C(g_Player_EquippedWeaponInfo.attackSfx, &player->position, Q8(0.5f), 0);
@@ -11852,11 +11903,16 @@ void Game_PlayerInfoInit(void) // 0x8007E5AC
 
     itemGroupId = INV_ITEM_GROUP(g_SavegamePtr->equippedWeapon);
 
-    // Assign weapon that the player was holding when saving.
+    // Check the bound before reading an item: reserve ammo may be absent.
+    i = INV_ITEM_COUNT_MAX;
     if (itemGroupId == InvItemGroup_MeleeWeapons || itemGroupId == InvItemGroup_GunWeapons)
     {
-        for (i = 0; g_SavegamePtr->items[i].id_0 != g_SavegamePtr->equippedWeapon && i < INV_ITEM_COUNT_MAX; i++);
+        for (i = 0; i < INV_ITEM_COUNT_MAX && g_SavegamePtr->items[i].id_0 != g_SavegamePtr->equippedWeapon; i++);
+    }
 
+    // Assign the saved weapon only if it exists in the inventory.
+    if (i < INV_ITEM_COUNT_MAX)
+    {
         g_SysWork.playerCombat.weaponAttack        = g_SavegamePtr->equippedWeapon + InvItemId_KitchenKnife;
         g_SysWork.playerCombat.currentWeaponAmmo  = g_SavegamePtr->items[i].count_1;
         g_SysWork.playerCombat.weaponInventoryIdx = i;
@@ -11868,7 +11924,7 @@ void Game_PlayerInfoInit(void) // 0x8007E5AC
         else
         {
             for (i = 0;
-                 g_SavegamePtr->items[i].id_0 != (g_SavegamePtr->equippedWeapon + InvItemId_HealthDrink) && i < INV_ITEM_COUNT_MAX;
+                 i < INV_ITEM_COUNT_MAX && g_SavegamePtr->items[i].id_0 != (g_SavegamePtr->equippedWeapon + InvItemId_HealthDrink);
                  i++);
 
             if (i == INV_ITEM_COUNT_MAX)
@@ -11883,6 +11939,13 @@ void Game_PlayerInfoInit(void) // 0x8007E5AC
     }
     else
     {
+        if (itemGroupId == InvItemGroup_MeleeWeapons || itemGroupId == InvItemGroup_GunWeapons)
+        {
+            // A missing saved weapon must not leave an invalid inventory index.
+            g_SavegamePtr->equippedWeapon = InvItemId_Unequipped;
+            g_Inventory_EquippedItem      = InvItemId_Unequipped;
+        }
+
         g_SysWork.playerCombat.weaponAttack        = NO_VALUE;
         g_SysWork.playerCombat.currentWeaponAmmo  = 0;
         g_SysWork.playerCombat.totalWeaponAmmo    = 0;

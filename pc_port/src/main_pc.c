@@ -287,16 +287,6 @@ void Pc_ApplyActiveControlScheme(void)
     Pc_ApplyControlConfig(g_DebugThirdPersonCam ? &g_PcConfig.altcam : &g_PcConfig.classic);
 }
 
-/* Force the classic (default) control scheme regardless of the active camera.
- * Menus always navigate with the default binds, so an alternate camera's binds
- * (mouse-look / remapped buttons) don't leak into menu navigation. Restored to
- * the camera-matched scheme via Pc_ApplyActiveControlScheme on return to
- * gameplay (driven by Pc_ControlStyleUpdate). */
-void Pc_ApplyClassicControlScheme(void)
-{
-    Pc_ApplyControlConfig(&g_PcConfig.classic);
-}
-
 /* Demo play file buffer pointer - default PSX address needs runtime init */
 typedef struct s_DemoFrameData s_DemoFrameData;
 extern s_DemoFrameData* g_Demo_PlayFileBufferPtr;
@@ -1881,6 +1871,7 @@ int main(int argc, char* argv[])
      * rather than one excluding the other. texture_filter 3..6 is anisotropic,
      * where the value carries the tap count as well as the mode. */
     g_cfg_psxDither = g_PcConfig.dithering ? 1 : 0;
+    { extern int g_cfg_ditherResolution; g_cfg_ditherResolution = g_PcConfig.ditherResolution; }
     switch (g_PcConfig.textureFilter) {
     case 1:  g_cfg_textureFilter = 1; break;
     case 2:  g_cfg_textureFilter = 2; break;

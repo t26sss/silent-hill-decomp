@@ -98,9 +98,9 @@ typedef struct {
                             * parts differ (snow's random walk, spawn/rest counters, the wind
                             * ramp); fall speed and wind are delta-scaled either way.
                             * (config key: weather_sim_hz, console: WEATHERHZ) */
-    int cutsceneLineGapMs; /* min silence (ms) between cutscene voice lines — simulates PSX CD
-                            * seek latency so tightly-timed lines don't run together. Applied as a
-                            * MINIMUM (never shortens an authored gap). 0 = off. Default 300. */
+    int cutsceneLineGapMs; /* Dialog Pause: the console's wait before each voiced line (stop and
+                            * play tasks, CD seek), replayed by xa_seek_model.c. A scale, not a
+                            * length: 300 is the console, 150 half of it, 600 double, 0 off. */
     /* "Dark Harry" easter egg (pc_dark_harry.c), NOT original-game behaviour.
      * darkHarry 0 = off entirely. afkSec = seconds of no input before he
      * appears; distance = how far out, in world units, which wants to be the
@@ -138,6 +138,13 @@ typedef struct {
      * smoothing mode is a legitimate combination the old single list could not
      * express. Default on. */
     int dithering;
+
+    /* Where the dither's 4x4 cells fall (config key: dither_resolution):
+     * 0 = one cell per PSX pixel, on the PSX image's grid; N = square cells,
+     * N of them down the 3D view; -1 = one per rendered pixel. Default 480,
+     * the nearest choice to the fixed two-pixel cell of earlier builds at
+     * 1080p. */
+    int ditherResolution;
 
     /* Texture filtering, dither excluded (config key: texture_filter):
      * 0 = off (point), 1 = bilinear, 2 = trilinear, 3..6 = anisotropic

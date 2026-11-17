@@ -125,6 +125,10 @@ static s32 g_PrevVBlanks = 0;
 static PACKET* s_PcPacketBufs[2] = { NULL, NULL };
 static PACKET* s_PcPacketBufEnds[2] = { NULL, NULL };
 
+/* Bytes of primitives the frame's state update wrote: how much the frame
+ * draws, which is what set the console's frame time (xa_seek_model.c). */
+int g_PcFramePacketBytes = 0;
+
 /* Exposes the active packet arena's end so the wide-LM drawer (pc_wide_lm_draw.c)
  * can bounds-check every emit — the GsOUT_PACKET_P arena has no emit-time guard,
  * and a dense modded model can emit far more prims than any stock walker. */
@@ -842,15 +846,8 @@ static void Pc_TpsCamera_Apply(void)
                 {
                     static Uint32 s_lastMoveMs = 0;
                     Uint32 now   = SDL_GetTicks();
-                    s32    held2 = g_Controller0->heldBtnFlags;
-                    int    moving = (g_sdlKeyboardState[SDL_SCANCODE_W] != 0) ||
-                                    (g_sdlKeyboardState[SDL_SCANCODE_A] != 0) ||
-                                    (g_sdlKeyboardState[SDL_SCANCODE_S] != 0) ||
-                                    (g_sdlKeyboardState[SDL_SCANCODE_D] != 0) ||
-                                    (held2 & (ControllerFlag_LStickUp   | ControllerFlag_LStickDown  |
-                                              ControllerFlag_LStickLeft | ControllerFlag_LStickRight |
-                                              ControllerFlag_DpadUp     | ControllerFlag_DpadDown    |
-                                              ControllerFlag_DpadLeft   | ControllerFlag_DpadRight));
+                    extern int Pc_AltCamMoveInput(void);
+                    int    moving = Pc_AltCamMoveInput();
                     Uint32 still;
                     if (moving) s_lastMoveMs = now;
                     still = now - s_lastMoveMs;
@@ -2482,6 +2479,40 @@ void MainLoop(void) // 0x80032EE0
             }
         }
 
+        /* Ahead of the quick menu, which reads this frame's pad edges: the Enter
+         * that submitted a console command reached it there as a Start click,
+         * and after `charmenu` that click opened the models of the row under the
+         * cursor in Character Select (Harry's). */
+        {
+            extern int g_PcConsoleInputActive;
+            extern int g_PcConsoleSwallowInput;
+            if (g_PcConsoleInputActive || g_PcConsoleSwallowInput) {
+                /* Release the swallow only when BOTH the raw SDL keys and the
+                 * parsed pad are clear of the submit/exit keystroke. The
+                 * keyboard→pad emulation lags the SDL array by a frame, so an
+                 * SDL-only check lets the final Enter through: with prev-held
+                 * zeroed, the stale Start parses as a fresh click edge and
+                 * fires a menu action. */
+                int swallowRelease =
+                    !g_PcConsoleInputActive &&
+                    g_sdlKeyboardState != NULL &&
+                    !g_sdlKeyboardState[SDL_SCANCODE_RETURN] &&
+                    !g_sdlKeyboardState[SDL_SCANCODE_GRAVE] &&
+                    !(g_Controller0->heldBtnFlags & ControllerFlag_Start);
+                if (swallowRelease) {
+                    g_PcConsoleSwallowInput = 0;
+                } else {
+                    g_Controller0->heldBtnFlags      = 0;
+                    g_Controller0->clickedBtnFlags   = 0;
+                    g_Controller0->releasedBtnFlags  = 0;
+                    g_Controller0->pulsedBtnFlags    = 0;
+                    g_Controller0->pulsedGuiBtnFlags = 0;
+                    g_Controller0->sticks_20.rawData_0 = 0;
+                    g_Controller0->sticks_24.rawData_0 = 0;
+                }
+            }
+        }
+
         {
             extern int  g_PcQuickOptionsActive;
             extern void Pc_QuickOptions_Update(int, int, int, int, int, int, int, int);
@@ -2577,35 +2608,6 @@ void MainLoop(void) // 0x80032EE0
                 g_Controller0->releasedBtnFlags  = 0;
                 g_Controller0->pulsedBtnFlags    = 0;
                 g_Controller0->pulsedGuiBtnFlags = 0;
-            }
-        }
-        {
-            extern int g_PcConsoleInputActive;
-            extern int g_PcConsoleSwallowInput;
-            if (g_PcConsoleInputActive || g_PcConsoleSwallowInput) {
-                /* Release the swallow only when BOTH the raw SDL keys and the
-                 * parsed pad are clear of the submit/exit keystroke. The
-                 * keyboard→pad emulation lags the SDL array by a frame, so an
-                 * SDL-only check lets the final Enter through: with prev-held
-                 * zeroed, the stale Start parses as a fresh click edge and
-                 * fires a menu action. */
-                int swallowRelease =
-                    !g_PcConsoleInputActive &&
-                    g_sdlKeyboardState != NULL &&
-                    !g_sdlKeyboardState[SDL_SCANCODE_RETURN] &&
-                    !g_sdlKeyboardState[SDL_SCANCODE_GRAVE] &&
-                    !(g_Controller0->heldBtnFlags & ControllerFlag_Start);
-                if (swallowRelease) {
-                    g_PcConsoleSwallowInput = 0;
-                } else {
-                    g_Controller0->heldBtnFlags      = 0;
-                    g_Controller0->clickedBtnFlags   = 0;
-                    g_Controller0->releasedBtnFlags  = 0;
-                    g_Controller0->pulsedBtnFlags    = 0;
-                    g_Controller0->pulsedGuiBtnFlags = 0;
-                    g_Controller0->sticks_20.rawData_0 = 0;
-                    g_Controller0->sticks_24.rawData_0 = 0;
-                }
             }
         }
 
@@ -2761,7 +2763,8 @@ void MainLoop(void) // 0x80032EE0
 #endif
         g_GameStateUpdateFuncs[g_GameWork.gameState]();
 #ifdef SH_PC_PORT
-        s_sfUpdEnd = (unsigned int)SDL_GetTicks();
+        s_sfUpdEnd           = (unsigned int)SDL_GetTicks();
+        g_PcFramePacketBytes = (int)(GsOUT_PACKET_P - s_PcPacketBufs[g_ActiveBufferIdx]);
         /* The touch overlay, for EVERY game state, drawn right after the state
          * that owns the frame has queued its own prims.
          *
